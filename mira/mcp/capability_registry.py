@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mira.contracts.capabilities.analyze_pe import AnalyzePEInput, AnalyzePEOutput
-from mira.contracts.capabilities.calculate_entropy import CalculateEntropyInput, CalculateEntropyOutput
+from mira.contracts.capabilities.entropy import CalculateEntropyInput, CalculateEntropyOutput
 from mira.contracts.capabilities.capa import RunCapaInput, RunCapaOutput
 from mira.contracts.capabilities.disassembly import DisassembleFunctionInput, DisassembleFunctionOutput
 from mira.contracts.capabilities.exports import ListExportsInput, ListExportsOutput
@@ -79,14 +79,14 @@ STATIC_CAPABILITIES = {
             input_model=ExtractStringsInput,
             output_model=ExtractStringsOutput,
         ),
-        CapabilityDefinition(
-            name="calculate_entropy",
-            description="Calculate whole-file or bounded-region entropy.",
-            category="triage",
-            supported_artifact_types=("pe", "unknown"),
-            input_model=CalculateEntropyInput,
-            output_model=CalculateEntropyOutput,
-        ),
+    CapabilityDefinition(
+        name="calculate_entropy",
+        description="Calculate whole-file or bounded-region entropy.",
+        category="triage",
+        supported_artifact_types=("pe", "unknown"),
+        input_model=CalculateEntropyInput,
+        output_model=CalculateEntropyOutput,
+      ),
         CapabilityDefinition(
             name="detect_packer",
             description="Report packing/protection indicators.",

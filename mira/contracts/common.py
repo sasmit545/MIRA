@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import NewType, Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # Basic NewTypes for identifiers and names
@@ -18,6 +18,7 @@ class Contract(BaseModel):
     """Base contract model with version."""
     contract_version: ContractVersion = Field(default='1.0')
     
-    class Config:
-        extra = 'forbid'
-        validate_assignment = True
+    model_config = ConfigDict(
+        extra='forbid',
+        validate_assignment=True,
+    )

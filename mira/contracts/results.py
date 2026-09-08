@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Generic, TypeVar, Optional, Dict, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .common import Contract, ContractVersion, RequestId
 from .errors import CapabilityError
@@ -19,7 +19,8 @@ class CapabilityResult(Contract, Generic[T]):
     error: Optional[CapabilityError] = Field(None, description="Structured error information if status is error")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
     
-    @validator('status')
+    @field_validator('status')
+    @classmethod
     def status_must_be_valid(cls, v):
         allowed = {'ok', 'unsupported', 'error'}
         if v not in allowed:

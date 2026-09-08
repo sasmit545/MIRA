@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Generic, TypeVar, Dict, Any
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 from .common import Contract, ContractVersion, RequestId, CapabilityName
 
@@ -16,7 +16,8 @@ class CapabilityRequest(Contract, Generic[T]):
     capability: CapabilityName = Field(..., description="Name of the capability to invoke")
     input: T = Field(..., description="Capability-specific input parameters")
     
-    @validator('input')
+    @field_validator('input')
+    @classmethod
     def input_must_be_dict(cls, v):
         if not isinstance(v, dict):
             raise ValueError('input must be a dictionary')
