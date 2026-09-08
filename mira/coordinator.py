@@ -14,9 +14,11 @@ class StaticCoordinator:
                 name="Assess packing indicators",
                 description="Assess whether the executable's high-entropy sections indicate packing or protection.",
                 reason="Structural PE analysis found a high-entropy executable section.",
+                capabilities=("detect_packer", "extract_strings"),
             )
         return StaticObjective(
             name="Characterize sample",
             description="Identify the artifact and characterize its executable structure.",
             reason="No evidence has yet established the sample's structure.",
+            capabilities=("file_info", "analyze_pe"),
         )

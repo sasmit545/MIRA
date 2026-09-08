@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from mira.mcp.client import StaticMCPClient
 from mira.contracts.requests import CapabilityRequest
@@ -18,6 +19,16 @@ class StaticObjective:
     name: str
     description: str
     reason: str
+    capabilities: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class StaticFinding:
+    """Results and normalized evidence produced while pursuing one objective."""
+
+    objective: StaticObjective
+    results: dict[str, dict]
+    evidence: list[dict]
 
 
 class StaticAgent:
@@ -44,4 +55,43 @@ class StaticAgent:
         )
         return await self._client.invoke_request(request)
 
-    # Add more methods for other capabilities as needed
+    async def investigate(self, objective: StaticObjective, artifact_id: str) -> StaticFinding:
+        """Execute an objective's declared capabilities and normalize their evidence."""
+        results: dict[str, dict] = {}
+        evidence: list[dict] = []
+        for capability in objective.capabilities:
+            result = await self._client.invoke(capability, artifact_id=artifact_id)
+            results[capability] = result
+            evidence.extend(self._evidence_from_result(capability, artifact_id, result))
+        return StaticFinding(objective=objective, results=results, evidence=evidence)
+
+    @staticmethod
+    def _evidence_from_result(capability: str, artifact_id: str, result: dict) -> list[dict]:
+        """Turn capability output into the evidence shape used by the coordinator."""
+        if result.get("status") != "ok":
+            return []
+
+        data: dict[str, Any] = result.get("data") or {}
+        if capability == "analyze_pe":
+            return [
+                {
+                    "kind": "high_entropy_executable_section",
+                    "artifact_id": artifact_id,
+                    "capability": capability,
+                    "section": section.get("name"),
+                    "entropy": section["entropy"],
+                }
+                for section in data.get("sections", [])
+                if section.get("entropy", 0) >= 7.2
+            ]
+        if capability == "detect_packer" and (data.get("packed") or data.get("indicators")):
+            return [
+                {
+                    "kind": "packing_indicator",
+                    "artifact_id": artifact_id,
+                    "capability": capability,
+                    "packed": bool(data.get("packed")),
+                    "indicators": data.get("indicators", []),
+                }
+            ]
+        return []

@@ -51,7 +51,11 @@ class StaticMCPServer:
         async with self._semaphore:
             execution = await asyncio.to_thread(self._runner, job, self.limits)
         if execution.status == "ok":
-            return execution.response or result_error(artifact.artifact_id, capability, "ANALYSIS_FAILED", "analysis returned no result")
+            if execution.response is None:
+                return result_error(artifact.artifact_id, capability, "ANALYSIS_FAILED", "analysis returned no result")
+            if "status" in execution.response:
+                return execution.response
+            return {"status": "ok", "data": execution.response}
         if execution.status == "timeout":
             return result_error(artifact.artifact_id, capability, "TIMEOUT", execution.message or "analysis timed out")
         if execution.status == "resource_limit":
@@ -62,18 +66,35 @@ class StaticMCPServer:
         if capability not in STATIC_CAPABILITIES:
             return None, {}, result_error(None, capability, "INVALID_INPUT", "capability is not registered")
         definition = STATIC_CAPABILITIES[capability]
+        if not isinstance(payload, dict):
+            return None, {}, result_error(None, capability, "INVALID_INPUT", "input must be an object")
         try:
             validated_input = definition.input_model(**payload)
         except ValidationError as e:
-            return None, {}, result_error(None, capability, "INVALID_INPUT", str(e))
+            return None, {}, result_error(None, capability, "INVALID_INPUT", _validation_message(e))
         artifact_id = validated_input.artifact_id
         try:
             artifact = self.artifact_store.get(artifact_id)
         except ArtifactError:
             return None, {}, result_error(artifact_id, capability, "ARTIFACT_NOT_FOUND", "artifact was not found")
         # Exclude artifact_id from parameters for the job
-        parameters = validated_input.model_dump(exclude={"artifact_id"})
+        parameters = validated_input.model_dump(exclude={"artifact_id", "contract_version"})
         return artifact, parameters, None
+
+
+def _validation_message(error: ValidationError) -> str:
+    """Translate Pydantic errors into stable messages for capability callers."""
+    messages = []
+    for item in error.errors():
+        location = ".".join(str(part) for part in item["loc"])
+        error_type = item["type"]
+        if error_type == "missing":
+            messages.append(f"{location} is required")
+        elif error_type == "extra_forbidden":
+            messages.append(f"{location} is not permitted")
+        else:
+            messages.append(f"{location}: {item['msg']}")
+    return "; ".join(messages)
 
 def build_fastmcp(server: StaticMCPServer):
     """Create an app whose FastMCP handlers await isolated capability work."""
