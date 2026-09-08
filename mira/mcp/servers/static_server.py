@@ -10,6 +10,7 @@ from mira.artifacts import ArtifactError, ArtifactStore
 from mira.capabilities.static.common import result_error
 from mira.mcp.capability_registry import STATIC_CAPABILITIES
 from mira.mcp.isolation import AnalysisJob, AnalysisLimits, ExecutionResult, run_isolated
+from pydantic import ValidationError
 
 
 class StaticMCPServer:
@@ -28,13 +29,19 @@ class StaticMCPServer:
         self.limits = limits or AnalysisLimits()
         self._runner = runner
         self._semaphore = asyncio.Semaphore(self.limits.max_concurrent)
-        self._parameters = {
-            name: set(definition.input_schema) - {"artifact_id"}
-            for name, definition in STATIC_CAPABILITIES.items()
-        }
 
     async def capabilities(self) -> dict:
-        return {name: definition.__dict__ for name, definition in STATIC_CAPABILITIES.items()}
+        return {
+            name: {
+                "name": definition.name,
+                "description": definition.description,
+                "category": definition.category,
+                "supported_artifact_types": definition.supported_artifact_types,
+                "input_schema": definition.input_schema,
+                "output_schema": definition.output_schema,
+            }
+            for name, definition in STATIC_CAPABILITIES.items()
+        }
 
     async def call(self, capability: str, payload: dict[str, Any]) -> dict:
         artifact, parameters, error = self._validate(capability, payload)
@@ -54,18 +61,18 @@ class StaticMCPServer:
     def _validate(self, capability: str, payload: dict[str, Any]) -> tuple[object | None, dict, dict | None]:
         if capability not in STATIC_CAPABILITIES:
             return None, {}, result_error(None, capability, "INVALID_INPUT", "capability is not registered")
-        if not isinstance(payload, dict) or not isinstance(payload.get("artifact_id"), str):
-            artifact_id = payload.get("artifact_id") if isinstance(payload, dict) else None
-            return None, {}, result_error(artifact_id, capability, "INVALID_INPUT", "artifact_id is required")
+        definition = STATIC_CAPABILITIES[capability]
         try:
-            artifact = self.artifact_store.get(payload["artifact_id"])
+            validated_input = definition.input_model(**payload)
+        except ValidationError as e:
+            return None, {}, result_error(None, capability, "INVALID_INPUT", str(e))
+        artifact_id = validated_input.artifact_id
+        try:
+            artifact = self.artifact_store.get(artifact_id)
         except ArtifactError:
-            return None, {}, result_error(payload["artifact_id"], capability, "ARTIFACT_NOT_FOUND", "artifact was not found")
-        parameters = {key: value for key, value in payload.items() if key != "artifact_id"}
-        unexpected = parameters.keys() - self._parameters[capability]
-        if unexpected:
-            message = f"unsupported parameter(s): {', '.join(sorted(unexpected))}"
-            return None, {}, result_error(artifact.artifact_id, capability, "INVALID_INPUT", message)
+            return None, {}, result_error(artifact_id, capability, "ARTIFACT_NOT_FOUND", "artifact was not found")
+        # Exclude artifact_id from parameters for the job
+        parameters = validated_input.model_dump(exclude={"artifact_id"})
         return artifact, parameters, None
 
 def build_fastmcp(server: StaticMCPServer):
