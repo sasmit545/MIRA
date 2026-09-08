@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from mira.mcp.client import StaticMCPClient
 from mira.contracts.requests import CapabilityRequest
 from mira.contracts.results import CapabilityResult
 from mira.contracts.capabilities.analyze_pe import AnalyzePEInput, AnalyzePEOutput
 from mira.contracts.capabilities.list_imports import ListImportsInput, ListImportsOutput
+
+
+@dataclass(frozen=True)
+class StaticObjective:
+    """A static-analysis task selected by the coordinator."""
+
+    name: str
+    description: str
+    reason: str
 
 
 class StaticAgent:
