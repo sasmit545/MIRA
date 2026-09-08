@@ -11,7 +11,7 @@ from mira.contracts.capabilities.disassembly import DisassembleFunctionInput, Di
 from mira.contracts.capabilities.exports import ListExportsInput, ListExportsOutput
 from mira.contracts.capabilities.file_info import FileInfoInput, FileInfoOutput
 from mira.contracts.capabilities.functions import ListFunctionsInput, ListFunctionsOutput
-from mira.contracts.capabilities.imports import ListImportsInput, ListImportsOutput
+from mira.contracts.capabilities.list_imports import ListImportsInput, ListImportsOutput
 from mira.contracts.capabilities.packer import DetectPackerInput, DetectPackerOutput
 from mira.contracts.capabilities.scan_yara import ScanYaraInput, ScanYaraOutput
 from mira.contracts.capabilities.strings import ExtractStringsInput, ExtractStringsOutput
