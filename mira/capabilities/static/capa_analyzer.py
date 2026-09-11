@@ -1,6 +1,6 @@
 """Optional CAPA integration with explicit dependency failures."""
 
-from mira.artifacts import Artifact
+from mira.core.artifact import Artifact
 from mira.capabilities.static.common import result_error
 
 

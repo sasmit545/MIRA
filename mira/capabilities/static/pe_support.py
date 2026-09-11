@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mira.artifacts import Artifact
+from mira.core.artifact import Artifact
 from mira.capabilities.static.common import is_pe, result_error
 
 

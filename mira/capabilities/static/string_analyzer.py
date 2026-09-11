@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from mira.artifacts import Artifact
+from mira.core.artifact import Artifact
 from mira.capabilities.static.common import MAX_REGION_SIZE, paginate, read_region, result_error, result_ok
 
 

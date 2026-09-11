@@ -7,7 +7,7 @@ from math import log2
 from pathlib import Path
 from typing import Any
 
-from mira.artifacts import Artifact
+from mira.core.artifact import Artifact
 
 TOOL_VERSION = "0.1.0"
 DEFAULT_LIMIT = 100

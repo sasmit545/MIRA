@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: mira
+Version: 0.1.0
+Requires-Python: >=3.11
+Requires-Dist: fastmcp==2.14.3
+Requires-Dist: pefile==2024.8.26
+Requires-Dist: capstone==5.0.6
+Requires-Dist: yara-python==4.5.4
+Requires-Dist: flare-capa==9.1.0
+Requires-Dist: pydantic>=2.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"

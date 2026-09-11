@@ -1,6 +1,6 @@
 """Bounded entropy calculations for whole artifacts and byte regions."""
 
-from mira.artifacts import Artifact
+from mira.core.artifact import Artifact
 from math import log2
 
 from mira.capabilities.static.common import read_region, result_error, result_ok, shannon_entropy

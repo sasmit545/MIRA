@@ -1,7 +1,7 @@
 import unittest
 
 from mira.agents.static_agent import StaticAgent
-from mira.coordinator import StaticCoordinator
+from mira.core.coordinator import StaticCoordinator
 
 
 class ScriptedClient:
