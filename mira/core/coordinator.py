@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mira.agents.static_agent import InvestigationObjective
+from mira.core.objective import InvestigationObjective
 
 
 class StaticCoordinator:

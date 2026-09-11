@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from mira.agents.base import InvestigationFinding
 from mira.agents.static_wiring import (
     STATIC_ROLE,
     STATIC_SCOPE,
@@ -17,6 +17,7 @@ from mira.contracts.capabilities.analyze_pe import AnalyzePEInput, AnalyzePEOutp
 from mira.contracts.capabilities.list_imports import ListImportsInput, ListImportsOutput
 from mira.contracts.requests import CapabilityRequest
 from mira.contracts.results import CapabilityResult
+from mira.core.objective import InvestigationObjective
 from mira.mcp.client import StaticMCPClient
 from mira.reasoning.composition import (
     DEFAULT_MAX_TOOL_CALLS,
@@ -28,30 +29,6 @@ from mira.reasoning.contracts.objective import Objective as LoopObjective
 from mira.reasoning.contracts.output import FinalOutput
 from mira.reasoning.definition.agent import AgentDefinition
 from mira.reasoning.runtime.tool_runtime import ToolRuntime
-
-
-@dataclass(frozen=True)
-class InvestigationObjective:
-    """An investigation task the Coordinator assigns to a specialist."""
-
-    name: str
-    description: str
-    reason: str
-    capabilities: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class InvestigationFinding:
-    """Results and normalized evidence produced while pursuing one objective.
-
-    Every specialist produces this shape (README section 11), which is why it
-    carries no Static prefix.
-    """
-
-    objective: InvestigationObjective
-    results: dict[str, dict]
-    evidence: list[dict]
-    output: FinalOutput
 
 
 class StaticAgent:

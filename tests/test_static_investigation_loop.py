@@ -5,6 +5,7 @@ rather than asserting a hardcoded capability order. What must stay true is
 that evidence from one objective changes the next one.
 """
 
+from mira.agents.base import Specialist
 from mira.agents.static_agent import StaticAgent
 from mira.core.coordinator import StaticCoordinator
 from mira.reasoning.contracts.model import ModelResponse
@@ -65,6 +66,11 @@ def build_agent(client, tmp_path, *tool_names):
         model=ToolThenReportModel(*tool_names),
         trace_dir=tmp_path,
     )
+
+
+def test_static_agent_satisfies_the_specialist_interface():
+    """Dynamic and Forensics will qualify the same way: structurally."""
+    assert isinstance(StaticAgent(ScriptedClient()), Specialist)
 
 
 async def test_evidence_changes_the_second_static_objective(tmp_path):
