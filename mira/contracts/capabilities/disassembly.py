@@ -14,10 +14,11 @@ class Instruction(Contract):
 
 
 class DisassembleFunctionInput(Contract):
+    # TODO(pagination): offset deferred - the handler pages by limit only.
+    # Restore it here once disassemble_function slices with paginate().
     artifact_id: str = Field(..., description="Identifier of the artifact")
     function_address: int = Field(..., description="Address of the function to disassemble")
     limit: int = Field(100, ge=1, le=1000, description="Maximum number of instructions to return")
-    offset: int = Field(0, ge=0, description="Offset for pagination")
 
 
 class DisassembleFunctionOutput(Contract):

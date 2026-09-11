@@ -14,10 +14,12 @@ class EntropyChunk(Contract):
 
 
 class CalculateEntropyInput(Contract):
+    # Note: offset here is a byte-region start paired with length, not a
+    # pagination cursor. Chunked entropy (chunk_size/chunks[]) is deferred;
+    # the handler measures the whole file or one bounded region.
     artifact_id: str = Field(..., description="Identifier of the artifact")
-    chunk_size: int = Field(1024, ge=1, description="Size of chunks for entropy calculation")
-    limit: int = Field(100, ge=1, le=1000, description="Maximum number of chunks to return")
-    offset: int = Field(0, ge=0, description="Offset for pagination")
+    offset: int | None = Field(None, ge=0, description="Start of the region to measure; supply with length")
+    length: int | None = Field(None, ge=1, description="Size of the region to measure; supply with offset")
 
 
 class CalculateEntropyOutput(Contract):

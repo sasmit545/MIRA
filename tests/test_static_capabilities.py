@@ -34,7 +34,7 @@ class FileInfoTests(unittest.TestCase):
             artifact_path.write_bytes(b"one-string\x00second-string\x00third-string")
             artifact = ArtifactStore(temporary_directory).register("sample-2", artifact_path)
 
-            result = extract_strings(artifact, minimum_length=4, limit=2)
+            result = extract_strings(artifact, min_length=4, limit=2)
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(len(result["data"]["strings"]), 2)

@@ -14,9 +14,9 @@ class CAPAFinding(Contract):
 
 
 class RunCapaInput(Contract):
+    # TODO(pagination): limit/offset deferred - run_capa is still a stub that
+    # reports TOOL_NOT_AVAILABLE. Add both when capa is actually integrated.
     artifact_id: str = Field(..., description="Identifier of the artifact")
-    limit: int = Field(100, ge=1, le=1000, description="Maximum number of findings to return")
-    offset: int = Field(0, ge=0, description="Offset for pagination")
 
 
 class RunCapaOutput(Contract):
