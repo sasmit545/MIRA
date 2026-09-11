@@ -1,79 +1,32 @@
-"""Composition root: assemble the static investigator and run it on a sample."""
+"""Composition root: assemble the static investigator and run it on a sample.
+
+This file is static-specific by nature — it names the static wiring and the
+static role. Dynamic and Forensics will each get their own composition root;
+what they share is `composition.py` and the loop beneath it.
+"""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 from pathlib import Path
 
-from mira.core.artifact import ArtifactStore
-from mira.mcp.capability_registry import STATIC_CAPABILITIES
-from mira.mcp.client import StaticMCPClient
-from mira.mcp.servers.static_server import StaticMCPServer
-
-from .contracts.objective import Objective
-from .contracts.output import FinalOutput
-from .contracts.tool import ToolSpec
-from .definition.agent import AgentDefinition
-from .model.adapter import ModelAdapter
-from .runtime.completion import CompletionChecker
-from .runtime.context import ContextBuilder
-from .runtime.loop import AgentLoop
-from .runtime.tool_runtime import ToolRuntime
-from .runtime.trace import Tracer
-
-ARTIFACT_ID = "sample"
-DEFAULT_MAX_TURNS = 10
-DEFAULT_MAX_TOOL_CALLS = 20
-
-STATIC_ROLE = "You are a static malware investigator."
-STATIC_SCOPE = (
-    "Static analysis only. The artifact under investigation is bound by the runtime, "
-    "so tool arguments never need to name it."
+from mira.agents.static_wiring import (
+    STATIC_ROLE,
+    STATIC_SCOPE,
+    build_client,
+    build_executor,
+    tool_manifest,
 )
 
+from .composition import build_loop, build_tracer, load_env
+from .contracts.objective import Objective
+from .contracts.output import FinalOutput
+from .definition.agent import AgentDefinition
+from .runtime.tool_runtime import ToolRuntime
 
-def load_env(path: Path = Path(".env")) -> None:
-    """Populate os.environ from a .env file. Real env vars win."""
-    if not path.is_file():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, _, value = line.partition("=")
-        os.environ.setdefault(name.strip(), value.strip().strip("\"'"))
-
-
-def tool_manifest() -> list[ToolSpec]:
-    """Expose the registered MCP capabilities as tool specs for the model."""
-    return [
-        ToolSpec(
-            name=definition.name,
-            description=definition.description,
-            parameters=definition.input_schema,
-        )
-        for definition in STATIC_CAPABILITIES.values()
-    ]
-
-
-def build_client(sample_path: Path) -> tuple[StaticMCPClient, str]:
-    """Register the sample and return a client bound to its store."""
-    store = ArtifactStore(sample_path.parent)
-    store.register(ARTIFACT_ID, sample_path)
-    return StaticMCPClient(StaticMCPServer(store)), ARTIFACT_ID
-
-
-def build_executor(client: StaticMCPClient, artifact_id: str):
-    """Bind the artifact so the model never chooses which sample to analyze."""
-
-    def execute(capability: str, arguments: dict):
-        parameters = {**arguments}
-        parameters.pop("artifact_id", None)
-        return client.invoke(capability, artifact_id=artifact_id, **parameters)
-
-    return execute
+DEFAULT_MAX_TURNS = 10
+DEFAULT_MAX_TOOL_CALLS = 20
 
 
 async def investigate(
@@ -85,7 +38,7 @@ async def investigate(
     max_turns: int = DEFAULT_MAX_TURNS,
     max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
 ) -> FinalOutput:
-    """Compose the agent and run one investigation.
+    """Compose the static agent and run one investigation.
 
     `model` defaults to the real provider adapter; tests inject a scripted one.
     """
@@ -102,16 +55,13 @@ async def investigate(
         max_tool_calls=max_tool_calls,
         output_contract=FinalOutput,
     )
-    objective = Objective(description=objective_text)
 
-    loop = AgentLoop(
-        model_adapter=model or ModelAdapter(),
+    loop = build_loop(
         tool_runtime=ToolRuntime(manifest, build_executor(client, artifact_id)),
-        completion_checker=CompletionChecker(),
-        context_builder=ContextBuilder(),
-        tracer=Tracer(run_id=sample_path.stem, output_dir=str(trace_dir)),
+        tracer=build_tracer(run_id=sample_path.stem, trace_dir=trace_dir),
+        model=model,
     )
-    return await loop.run(objective, agent_def)
+    return await loop.run(Objective(description=objective_text), agent_def)
 
 
 def main() -> None:
