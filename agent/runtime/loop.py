@@ -1,19 +1,21 @@
 """Agent loop."""
 
 import json
-
 from typing import List
-from ..contracts.objective import Objective
-from ..contracts.tool import ToolSpec, ToolCall, ToolResult
+
 from ..contracts.model import ModelResponse
+from ..contracts.objective import Objective
 from ..contracts.output import FinalOutput
 from ..contracts.state import State
+from ..contracts.tool import ToolCall, ToolResult, ToolSpec
 from ..definition.agent import StaticAgentDefinition
-from .context import ContextBuilder
 from ..model.adapter import ModelAdapter
-from .tool_runtime import ToolRuntime
 from .completion import CompletionChecker
+from .context import ContextBuilder
+from .tool_runtime import ToolRuntime
 from .trace import Tracer
+
+REPORT_TOOL_CALL_ID = "submit_report"
 
 
 class AgentLoop:
@@ -33,32 +35,40 @@ class AgentLoop:
         self.context = context_builder
         self.tracer = tracer
 
-    def run(
+    async def run(
         self,
         objective: Objective,
         agent_def: StaticAgentDefinition,
     ) -> FinalOutput:
-        """Run the investigation until completion."""
+        """Run the investigation until completion. Always writes a trace."""
         state = State(objective=objective)
+        try:
+            return await self._run(state, agent_def)
+        finally:
+            self.tracer.save()
 
+    async def _run(self, state: State, agent_def: StaticAgentDefinition) -> FinalOutput:
         while self.completion.is_active(state, agent_def):
-            # Build context for the model
             context_str = self.context.build(state, agent_def)
-            # Get available tools (as ToolSpecs)
             available_tools: List[ToolSpec] = agent_def.allowed_tools
 
-            # Ask the model what to do
             response: ModelResponse = self.model.generate(
                 context=context_str,
                 tools=available_tools,
             )
 
-            # Handle the response
             if response.report is not None:
                 self.completion.record_non_empty_response()
-                return self._parse_report(response.report, state, agent_def)
+                report, failure = self._parse_report(response.report, state, agent_def)
+                if report is not None:
+                    return report
+                # Validation failure is an observation the model can recover from.
+                self._record_report_failure(state, response.report, failure)
+                self.tracer.turn(context_str, response, [], [], state.snapshot())
+                state.turn_count += 1
+                continue
 
-            if response.tool_calls is None or len(response.tool_calls) == 0:
+            if not response.tool_calls:
                 self.completion.record_empty_response()
                 self.tracer.turn(context_str, response, [], [], state.snapshot())
                 state.turn_count += 1
@@ -66,73 +76,94 @@ class AgentLoop:
 
             self.completion.record_non_empty_response()
 
-            # Process tool calls
+            calls: list[ToolCall] = []
+            results: list[ToolResult] = []
             for tool_call in response.tool_calls:
-                # Execute the tool
-                tool_result: ToolResult = self.tools.execute(tool_call)
-                # Record the tool call and result in the state
+                tool_result = await self.tools.execute(tool_call)
                 state.record_tool_call(tool_call)
                 state.record_tool_result(tool_result)
-                # Trace the turn
-                self.tracer.turn(context_str, response, [tool_call], [tool_result], state.snapshot())
+                calls.append(tool_call)
+                results.append(tool_result)
 
-            # Increment turn count
+            self.tracer.turn(context_str, response, calls, results, state.snapshot())
             state.turn_count += 1
 
-        completion_reason = self._completion_reason(state, agent_def)
         return FinalOutput(
             summary="The investigation stopped before the model submitted a report.",
             verdict="inconclusive",
             findings=state.findings,
-            evidence=[
-                observation["result"]
-                for observation in state.observations
-                if observation["result"] is not None
-            ],
-            completion_reason=completion_reason,
-            metadata={
-                "run_id": state.run_id,
-                "turns": state.turn_count,
-                "tool_calls": state.tool_call_count,
-            },
+            evidence=self._evidence(state),
+            completion_reason=self._completion_reason(state, agent_def),
+            metadata=self._metadata(state),
         )
 
-    @staticmethod
-    def _parse_report(report: str, state, agent_def: StaticAgentDefinition) -> FinalOutput:
+    def _record_report_failure(self, state: State, report: str, failure: str) -> None:
+        """Feed a malformed report back as an observation, not an exception."""
+        call = ToolCall(
+            tool_call_id=REPORT_TOOL_CALL_ID,
+            name=REPORT_TOOL_CALL_ID,
+            arguments={"report": report},
+        )
+        state.record_tool_call(call)
+        state.record_tool_result(
+            ToolResult(
+                tool_call_id=REPORT_TOOL_CALL_ID,
+                success=False,
+                error=f"Report rejected: {failure}",
+            )
+        )
+
+    def _parse_report(
+        self,
+        report: str,
+        state: State,
+        agent_def: StaticAgentDefinition,
+    ) -> tuple[FinalOutput | None, str]:
+        """Validate a submitted report. Returns (output, failure_reason)."""
         try:
             payload = json.loads(report)
         except json.JSONDecodeError as error:
-            raise ValueError("Model report must be valid JSON") from error
+            return None, f"report must be valid JSON ({error})"
         if not isinstance(payload, dict):
-            raise ValueError("Model report must be a JSON object")
+            return None, "report must be a JSON object"
 
-        required_fields = {"summary", "verdict", "findings"}
-        missing_fields = required_fields - payload.keys()
+        missing_fields = {"summary", "verdict", "findings"} - payload.keys()
         if missing_fields:
-            raise ValueError(f"Model report is missing required fields: {', '.join(sorted(missing_fields))}")
+            return None, f"report is missing required fields: {', '.join(sorted(missing_fields))}"
 
         metadata = payload.get("metadata", {})
         if not isinstance(metadata, dict):
-            raise ValueError("Model report metadata must be an object")
-        return agent_def.output_contract(
-            summary=payload["summary"],
-            verdict=payload["verdict"],
-            findings=payload["findings"],
-            evidence=[
-                observation["result"]
-                for observation in state.observations
-                if observation["result"] is not None
-            ],
-            completion_reason="reported",
-            metadata={
-                **metadata,
-                "run_id": state.run_id,
-                "turns": state.turn_count,
-                "tool_calls": state.tool_call_count,
-            },
+            return None, "report metadata must be an object"
+
+        return (
+            agent_def.output_contract(
+                summary=payload["summary"],
+                verdict=payload["verdict"],
+                findings=payload["findings"],
+                evidence=self._evidence(state),
+                completion_reason="reported",
+                metadata={**metadata, **self._metadata(state)},
+            ),
+            "",
         )
 
-    def _completion_reason(self, state, agent_def: StaticAgentDefinition) -> str:
+    @staticmethod
+    def _evidence(state: State) -> list:
+        return [
+            observation["result"]
+            for observation in state.observations
+            if observation["result"] is not None
+        ]
+
+    @staticmethod
+    def _metadata(state: State) -> dict:
+        return {
+            "run_id": state.run_id,
+            "turns": state.turn_count,
+            "tool_calls": state.tool_call_count,
+        }
+
+    def _completion_reason(self, state: State, agent_def: StaticAgentDefinition) -> str:
         if self.completion.consecutive_empty_responses >= 2:
             return "degraded"
         if state.tool_call_count >= agent_def.max_tool_calls:

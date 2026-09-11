@@ -43,5 +43,12 @@ class Tracer:
         """Save the trace to a JSON file and return the file path."""
         trace_file = os.path.join(self.output_dir, f"trace_{self.run_id}.json")
         with open(trace_file, "w") as f:
-            json.dump(self.trace, f, indent=2)
+            json.dump(self.trace, f, indent=2, default=_serializable)
         return trace_file
+
+
+def _serializable(value: Any):
+    """Render contract objects and stray payloads so a trace always writes."""
+    if hasattr(value, "__dict__"):
+        return dict(value.__dict__)
+    return repr(value)
