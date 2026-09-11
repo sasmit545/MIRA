@@ -33,7 +33,7 @@ class InvestigationState:
         """Add artifact to the state and update timestamp."""
         self.artifacts.append(artifact)
         self.updated_at = datetime.now()
-        self._log_state_change("artifact_added", {"artifact_id": artifact.id})
+        self._log_state_change("artifact_added", {"artifact_id": artifact.artifact_id})
 
     def add_hypothesis(self, hypothesis: Hypothesis):
         """Add hypothesis to the state and update timestamp."""
@@ -77,7 +77,7 @@ class InvestigationState:
     def get_artifact_by_id(self, artifact_id: str) -> Optional[Artifact]:
         """Get artifact by its ID."""
         for artifact in self.artifacts:
-            if artifact.id == artifact_id:
+            if artifact.artifact_id == artifact_id:
                 return artifact
         return None
 
