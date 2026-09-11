@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import Any, Callable
 
-from mira.artifacts import ArtifactError, ArtifactStore
+from mira.core.artifact import ArtifactError, ArtifactStore
 from mira.capabilities.static.common import result_error
 from mira.mcp.capability_registry import STATIC_CAPABILITIES
 from mira.mcp.isolation import AnalysisJob, AnalysisLimits, ExecutionResult, run_isolated

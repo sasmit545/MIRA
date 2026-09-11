@@ -1,6 +1,6 @@
 """Heuristic static function discovery."""
 
-from mira.artifacts import Artifact
+from mira.core.artifact import Artifact
 from mira.capabilities.static.common import paginate, result_error, result_ok
 from mira.capabilities.static.pe_support import load_pe
 

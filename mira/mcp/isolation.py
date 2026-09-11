@@ -11,7 +11,7 @@ from queue import Empty
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from mira.artifacts import Artifact
+from mira.core.artifact import Artifact
 
 
 @dataclass(frozen=True)

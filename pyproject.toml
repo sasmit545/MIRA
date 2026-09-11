@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "mira"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = [  "fastmcp==2.14.3",
+dependencies = [  "google-generativeai",  "fastmcp==2.14.3",
   "pefile==2024.8.26",
   "capstone==5.0.6",
   "yara-python==4.5.4",
@@ -20,9 +20,10 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["mira*"]
+include = ["mira*", "agent*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = "--import-mode=importlib"
 
 

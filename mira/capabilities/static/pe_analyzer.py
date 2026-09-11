@@ -1,6 +1,6 @@
 """PE header and section analysis, intentionally excluding import/export tables."""
 
-from mira.artifacts import Artifact
+from mira.core.artifact import Artifact
 from mira.capabilities.static.common import result_ok, shannon_entropy
 from mira.capabilities.static.pe_support import load_pe
 

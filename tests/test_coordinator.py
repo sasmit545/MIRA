@@ -1,6 +1,6 @@
 import unittest
 
-from mira.coordinator import StaticCoordinator
+from mira.core.coordinator import StaticCoordinator
 
 
 class StaticCoordinatorTests(unittest.TestCase):

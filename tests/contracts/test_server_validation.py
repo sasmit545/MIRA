@@ -7,7 +7,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from mira.mcp.servers.static_server import StaticMCPServer
-from mira.artifacts import ArtifactStore, ArtifactError
+from mira.core.artifact import ArtifactStore, ArtifactError
 from mira.mcp.isolation import AnalysisJob, AnalysisLimits, ExecutionResult
 from mira.contracts.capabilities.analyze_pe import AnalyzePEInput, AnalyzePEOutput
 from mira.contracts.capabilities.list_imports import ListImportsInput, ListImportsOutput

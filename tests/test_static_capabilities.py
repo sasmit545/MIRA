@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mira.artifacts import ArtifactStore
+from mira.core.artifact import ArtifactStore
 from mira.capabilities.static.file_info import analyze_file_info
 from mira.capabilities.static.string_analyzer import extract_strings
 from mira.mcp.client import StaticMCPClient
