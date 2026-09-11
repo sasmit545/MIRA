@@ -8,7 +8,7 @@ from ..contracts.objective import Objective
 from ..contracts.output import FinalOutput
 from ..contracts.state import State
 from ..contracts.tool import ToolCall, ToolResult, ToolSpec
-from ..definition.agent import StaticAgentDefinition
+from ..definition.agent import AgentDefinition
 from ..model.adapter import ModelAdapter
 from .completion import CompletionChecker
 from .context import ContextBuilder
@@ -38,7 +38,7 @@ class AgentLoop:
     async def run(
         self,
         objective: Objective,
-        agent_def: StaticAgentDefinition,
+        agent_def: AgentDefinition,
     ) -> FinalOutput:
         """Run the investigation until completion. Always writes a trace."""
         state = State(objective=objective)
@@ -47,7 +47,7 @@ class AgentLoop:
         finally:
             self.tracer.save()
 
-    async def _run(self, state: State, agent_def: StaticAgentDefinition) -> FinalOutput:
+    async def _run(self, state: State, agent_def: AgentDefinition) -> FinalOutput:
         while self.completion.is_active(state, agent_def):
             context_str = self.context.build(state, agent_def)
             available_tools: List[ToolSpec] = agent_def.allowed_tools
@@ -117,7 +117,7 @@ class AgentLoop:
         self,
         report: str,
         state: State,
-        agent_def: StaticAgentDefinition,
+        agent_def: AgentDefinition,
     ) -> tuple[FinalOutput | None, str]:
         """Validate a submitted report. Returns (output, failure_reason)."""
         try:
@@ -163,7 +163,7 @@ class AgentLoop:
             "tool_calls": state.tool_call_count,
         }
 
-    def _completion_reason(self, state: State, agent_def: StaticAgentDefinition) -> str:
+    def _completion_reason(self, state: State, agent_def: AgentDefinition) -> str:
         if self.completion.consecutive_empty_responses >= 2:
             return "degraded"
         if state.tool_call_count >= agent_def.max_tool_calls:

@@ -1,8 +1,7 @@
 """Completion semantics for the agent loop."""
 
-from ..contracts.objective import Objective
-from ..definition.agent import StaticAgentDefinition
-from ..contracts.state import State  # We'll assume we have a State class in context
+from ..contracts.state import State
+from ..definition.agent import AgentDefinition
 
 
 class CompletionChecker:
@@ -11,7 +10,7 @@ class CompletionChecker:
     def __init__(self):
         self.consecutive_empty_responses = 0
 
-    def is_active(self, state: State, agent_def: StaticAgentDefinition) -> bool:
+    def is_active(self, state: State, agent_def: AgentDefinition) -> bool:
         """Return True if the loop should continue, False if it should terminate."""
         # Condition 2: max_turns reached
         if state.turn_count >= agent_def.max_turns:

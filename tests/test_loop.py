@@ -4,7 +4,7 @@ from mira.reasoning.contracts.model import ModelResponse
 from mira.reasoning.contracts.objective import Objective
 from mira.reasoning.contracts.output import FinalOutput
 from mira.reasoning.contracts.tool import ToolCall, ToolSpec
-from mira.reasoning.definition.agent import StaticAgentDefinition
+from mira.reasoning.definition.agent import AgentDefinition
 from mira.reasoning.runtime.completion import CompletionChecker
 from mira.reasoning.runtime.context import ContextBuilder
 from mira.reasoning.runtime.loop import AgentLoop
@@ -28,7 +28,9 @@ class ScriptedModel:
 
 
 def build_definition(tools=(), max_turns=10, max_tool_calls=10):
-    return StaticAgentDefinition(
+    return AgentDefinition(
+        role="You are a test investigator.",
+        scope="Test scope only.",
         instructions="Test instructions",
         tool_manifest=list(tools),
         allowed_tools=list(tools),

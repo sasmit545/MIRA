@@ -5,6 +5,7 @@ from ..contracts.tool import ToolSpec
 
 
 def assemble_instructions(
+    role: str,
     objective: str,
     scope: str,
     available_tools: List[ToolSpec],
@@ -12,7 +13,7 @@ def assemble_instructions(
 ) -> str:
     """Assemble the model-facing prompt from sections."""
     sections = [
-        "Role: You are a static malware investigator.",
+        f"Role: {role}",
         "",
         f"Investigation objective: {objective}",
         "",

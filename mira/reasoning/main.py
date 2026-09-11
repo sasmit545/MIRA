@@ -15,7 +15,7 @@ from mira.mcp.servers.static_server import StaticMCPServer
 from .contracts.objective import Objective
 from .contracts.output import FinalOutput
 from .contracts.tool import ToolSpec
-from .definition.agent import StaticAgentDefinition
+from .definition.agent import AgentDefinition
 from .model.adapter import ModelAdapter
 from .runtime.completion import CompletionChecker
 from .runtime.context import ContextBuilder
@@ -26,6 +26,12 @@ from .runtime.trace import Tracer
 ARTIFACT_ID = "sample"
 DEFAULT_MAX_TURNS = 10
 DEFAULT_MAX_TOOL_CALLS = 20
+
+STATIC_ROLE = "You are a static malware investigator."
+STATIC_SCOPE = (
+    "Static analysis only. The artifact under investigation is bound by the runtime, "
+    "so tool arguments never need to name it."
+)
 
 
 def load_env(path: Path = Path(".env")) -> None:
@@ -86,7 +92,9 @@ async def investigate(
     client, artifact_id = build_client(sample_path)
     manifest = tool_manifest()
 
-    agent_def = StaticAgentDefinition(
+    agent_def = AgentDefinition(
+        role=STATIC_ROLE,
+        scope=STATIC_SCOPE,
         instructions="Static malware investigator.",
         tool_manifest=manifest,
         allowed_tools=manifest,

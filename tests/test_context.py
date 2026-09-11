@@ -4,14 +4,18 @@ from mira.reasoning.contracts.objective import Objective
 from mira.reasoning.contracts.output import FinalOutput
 from mira.reasoning.contracts.state import State
 from mira.reasoning.contracts.tool import ToolCall, ToolResult, ToolSpec
-from mira.reasoning.definition.agent import StaticAgentDefinition
+from mira.reasoning.definition.agent import AgentDefinition
 from mira.reasoning.runtime.context import MAX_OBSERVATION_CHARS, ContextBuilder, truncate
 
 SPEC = ToolSpec(name="file_info", description="Identify hashes.", parameters={})
+ROLE = "You are a test investigator."
+SCOPE = "Test scope only."
 
 
-def build_definition():
-    return StaticAgentDefinition(
+def build_definition(role=ROLE, scope=SCOPE):
+    return AgentDefinition(
+        role=role,
+        scope=scope,
         instructions="Test instructions",
         tool_manifest=[SPEC],
         allowed_tools=[SPEC],
@@ -31,6 +35,21 @@ def test_context_includes_objective_and_tools():
     assert "Test objective" in context
     assert "file_info" in context
     assert "Identify hashes." in context
+
+
+def test_context_carries_the_definitions_role_and_scope():
+    """Role and scope come from the definition, so each specialist sets its own."""
+    context = ContextBuilder.build(
+        build_state(),
+        build_definition(
+            role="You are a dynamic malware investigator.",
+            scope="Runtime behavior only.",
+        ),
+    )
+
+    assert "You are a dynamic malware investigator." in context
+    assert "Runtime behavior only." in context
+    assert "static" not in context.lower()
 
 
 def test_context_reports_an_empty_history():

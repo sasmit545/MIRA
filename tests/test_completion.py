@@ -2,7 +2,7 @@
 
 from mira.reasoning.runtime.completion import CompletionChecker
 from mira.reasoning.contracts.objective import Objective
-from mira.reasoning.definition.agent import StaticAgentDefinition
+from mira.reasoning.definition.agent import AgentDefinition
 from mira.reasoning.contracts.state import State
 
 
@@ -15,7 +15,9 @@ def test_is_active_max_turns():
     obj = Objective(description="Test objective")
     state = State(objective=obj)
     state.turn_count = 10
-    agent_def = StaticAgentDefinition(
+    agent_def = AgentDefinition(
+        role="Test role.",
+        scope="Test scope.",
         instructions="Test",
         tool_manifest=[],
         allowed_tools=[],
@@ -31,7 +33,9 @@ def test_is_active_max_tool_calls():
     obj = Objective(description="Test objective")
     state = State(objective=obj)
     state.tool_call_count = 10
-    agent_def = StaticAgentDefinition(
+    agent_def = AgentDefinition(
+        role="Test role.",
+        scope="Test scope.",
         instructions="Test",
         tool_manifest=[],
         allowed_tools=[],
@@ -46,7 +50,9 @@ def test_is_active_max_tool_calls():
 def test_is_active_consecutive_empty_responses():
     obj = Objective(description="Test objective")
     state = State(objective=obj)
-    agent_def = StaticAgentDefinition(
+    agent_def = AgentDefinition(
+        role="Test role.",
+        scope="Test scope.",
         instructions="Test",
         tool_manifest=[],
         allowed_tools=[],

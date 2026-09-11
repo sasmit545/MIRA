@@ -11,11 +11,6 @@ from ..definition.instructions import assemble_instructions
 
 MAX_OBSERVATION_CHARS = 2000
 
-SCOPE = (
-    "Static analysis only. The artifact under investigation is bound by the runtime, "
-    "so tool arguments never need to name it."
-)
-
 
 class ContextBuilder:
     """Builds the model-facing context from state and agent definition."""
@@ -23,8 +18,9 @@ class ContextBuilder:
     @staticmethod
     def build(state: State, agent_definition: Any) -> str:
         return assemble_instructions(
+            role=agent_definition.role,
             objective=state.objective.description,
-            scope=SCOPE,
+            scope=agent_definition.scope,
             available_tools=list(agent_definition.allowed_tools),
             current_state=render_state(state),
         )
