@@ -19,14 +19,17 @@ from mira.agents.static_wiring import (
     tool_manifest,
 )
 
-from .composition import build_loop, build_tracer, load_env
+from .composition import (
+    DEFAULT_MAX_TOOL_CALLS,
+    DEFAULT_MAX_TURNS,
+    build_loop,
+    build_tracer,
+    load_env,
+)
 from .contracts.objective import Objective
 from .contracts.output import FinalOutput
 from .definition.agent import AgentDefinition
 from .runtime.tool_runtime import ToolRuntime
-
-DEFAULT_MAX_TURNS = 10
-DEFAULT_MAX_TOOL_CALLS = 20
 
 
 async def investigate(

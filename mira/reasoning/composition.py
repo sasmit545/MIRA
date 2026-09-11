@@ -16,6 +16,9 @@ from .runtime.loop import AgentLoop
 from .runtime.tool_runtime import ToolRuntime
 from .runtime.trace import Tracer
 
+DEFAULT_MAX_TURNS = 10
+DEFAULT_MAX_TOOL_CALLS = 20
+
 
 def load_env(path: Path = Path(".env")) -> None:
     """Populate os.environ from a .env file. Real env vars win."""
