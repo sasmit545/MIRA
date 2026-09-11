@@ -31,8 +31,8 @@ from mira.reasoning.runtime.tool_runtime import ToolRuntime
 
 
 @dataclass(frozen=True)
-class StaticObjective:
-    """A static-analysis task selected by the coordinator."""
+class InvestigationObjective:
+    """An investigation task the Coordinator assigns to a specialist."""
 
     name: str
     description: str
@@ -41,10 +41,14 @@ class StaticObjective:
 
 
 @dataclass(frozen=True)
-class StaticFinding:
-    """Results and normalized evidence produced while pursuing one objective."""
+class InvestigationFinding:
+    """Results and normalized evidence produced while pursuing one objective.
 
-    objective: StaticObjective
+    Every specialist produces this shape (README section 11), which is why it
+    carries no Static prefix.
+    """
+
+    objective: InvestigationObjective
     results: dict[str, dict]
     evidence: list[dict]
     output: FinalOutput
@@ -91,7 +95,9 @@ class StaticAgent:
         )
         return await self._client.invoke_request(request)
 
-    async def investigate(self, objective: StaticObjective, artifact_id: str) -> StaticFinding:
+    async def investigate(
+        self, objective: InvestigationObjective, artifact_id: str
+    ) -> InvestigationFinding:
         """Pursue one objective, letting the model choose within its capabilities.
 
         Only the objective's capabilities reach the runtime, so a capability
@@ -131,7 +137,7 @@ class StaticAgent:
         output = await loop.run(
             LoopObjective(description=objective.description), agent_definition
         )
-        return StaticFinding(
+        return InvestigationFinding(
             objective=objective, results=results, evidence=evidence, output=output
         )
 
@@ -167,7 +173,7 @@ class StaticAgent:
         return []
 
 
-def _run_id(artifact_id: str, objective: StaticObjective) -> str:
+def _run_id(artifact_id: str, objective: InvestigationObjective) -> str:
     """Keep two objectives on one artifact from overwriting each other's trace."""
     slug = re.sub(r"[^a-z0-9]+", "_", objective.name.lower()).strip("_")
     return f"{artifact_id}_{slug}"
