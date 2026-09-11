@@ -1,15 +1,15 @@
 """Tests for AgentLoop."""
 
-from agent.contracts.model import ModelResponse
-from agent.contracts.objective import Objective
-from agent.contracts.output import FinalOutput
-from agent.contracts.tool import ToolCall, ToolSpec
-from agent.definition.agent import StaticAgentDefinition
-from agent.runtime.completion import CompletionChecker
-from agent.runtime.context import ContextBuilder
-from agent.runtime.loop import AgentLoop
-from agent.runtime.tool_runtime import ToolRuntime
-from agent.runtime.trace import Tracer
+from mira.reasoning.contracts.model import ModelResponse
+from mira.reasoning.contracts.objective import Objective
+from mira.reasoning.contracts.output import FinalOutput
+from mira.reasoning.contracts.tool import ToolCall, ToolSpec
+from mira.reasoning.definition.agent import StaticAgentDefinition
+from mira.reasoning.runtime.completion import CompletionChecker
+from mira.reasoning.runtime.context import ContextBuilder
+from mira.reasoning.runtime.loop import AgentLoop
+from mira.reasoning.runtime.tool_runtime import ToolRuntime
+from mira.reasoning.runtime.trace import Tracer
 
 REPORT = '{"summary": "test", "verdict": "test", "findings": []}'
 

@@ -1,11 +1,11 @@
 """Tests for ContextBuilder."""
 
-from agent.contracts.objective import Objective
-from agent.contracts.output import FinalOutput
-from agent.contracts.state import State
-from agent.contracts.tool import ToolCall, ToolResult, ToolSpec
-from agent.definition.agent import StaticAgentDefinition
-from agent.runtime.context import MAX_OBSERVATION_CHARS, ContextBuilder, truncate
+from mira.reasoning.contracts.objective import Objective
+from mira.reasoning.contracts.output import FinalOutput
+from mira.reasoning.contracts.state import State
+from mira.reasoning.contracts.tool import ToolCall, ToolResult, ToolSpec
+from mira.reasoning.definition.agent import StaticAgentDefinition
+from mira.reasoning.runtime.context import MAX_OBSERVATION_CHARS, ContextBuilder, truncate
 
 SPEC = ToolSpec(name="file_info", description="Identify hashes.", parameters={})
 

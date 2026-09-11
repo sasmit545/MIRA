@@ -1,9 +1,9 @@
 """Tests for State."""
 
-from agent.contracts.objective import Objective
-from agent.contracts.state import State
-from agent.contracts.finding import Finding
-from agent.contracts.tool import ToolCall, ToolResult
+from mira.reasoning.contracts.objective import Objective
+from mira.reasoning.contracts.state import State
+from mira.reasoning.contracts.finding import Finding
+from mira.reasoning.contracts.tool import ToolCall, ToolResult
 
 
 def test_state_initialization():

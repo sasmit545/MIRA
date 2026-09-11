@@ -1,9 +1,9 @@
 """Tests for CompletionChecker."""
 
-from agent.runtime.completion import CompletionChecker
-from agent.contracts.objective import Objective
-from agent.definition.agent import StaticAgentDefinition
-from agent.contracts.state import State
+from mira.reasoning.runtime.completion import CompletionChecker
+from mira.reasoning.contracts.objective import Objective
+from mira.reasoning.definition.agent import StaticAgentDefinition
+from mira.reasoning.contracts.state import State
 
 
 def test_completion_checker_initialization():

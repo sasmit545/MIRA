@@ -20,7 +20,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["mira*", "agent*"]
+include = ["mira*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

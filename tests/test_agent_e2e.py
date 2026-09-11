@@ -4,9 +4,9 @@ Uses a scripted model so the run is deterministic, but everything below the
 model is real — artifact store, MCP server, isolated worker, and the loop.
 """
 
-from agent.contracts.model import ModelResponse
-from agent.contracts.tool import ToolCall
-from agent.main import investigate
+from mira.reasoning.contracts.model import ModelResponse
+from mira.reasoning.contracts.tool import ToolCall
+from mira.reasoning.main import investigate
 
 REPORT = '{"summary": "a small file", "verdict": "benign", "findings": []}'
 SAMPLE_BYTES = b"hello world" * 10
