@@ -105,7 +105,7 @@ def detect_file_type(path: Path) -> str:
             return "unknown"
         offset = int.from_bytes(header[0x3C:0x40], "little")
         artifact_file.seek(offset)
-        return "pe" if artifact_file.read(4) == b"PE\\0\\0" else "unknown"
+        return "pe" if artifact_file.read(4) == b"PE\x00\x00" else "unknown"
 
 
 def _hash_file(path: Path) -> str:

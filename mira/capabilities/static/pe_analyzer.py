@@ -14,7 +14,7 @@ def analyze_pe(artifact: Artifact) -> dict:
         raw_data = section.get_data()
         sections.append(
             {
-                "name": section.Name.rstrip(b"\\0").decode("ascii", errors="replace"),
+                "name": section.Name.rstrip(b"\x00").decode("ascii", errors="replace"),
                 "virtual_address": section.VirtualAddress,
                 "virtual_size": section.Misc_VirtualSize,
                 "raw_size": section.SizeOfRawData,

@@ -9,7 +9,7 @@ def detect_packer(artifact: Artifact) -> dict:
     pe, failure = load_pe(artifact, "detect_packer")
     if failure:
         return failure
-    names = {section.Name.rstrip(b"\\0").decode("ascii", errors="replace").upper() for section in pe.sections}
+    names = {section.Name.rstrip(b"\x00").decode("ascii", errors="replace").upper() for section in pe.sections}
     indicators = []
     packer = None
     if {"UPX0", "UPX1"}.issubset(names):
