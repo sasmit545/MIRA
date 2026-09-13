@@ -11,7 +11,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from mira.agents.static_wiring import (
+from mira.agents.static.wiring import (
     STATIC_ROLE,
     STATIC_SCOPE,
     build_client,

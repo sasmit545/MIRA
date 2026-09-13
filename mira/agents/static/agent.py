@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from mira.agents.base import InvestigationFinding
-from mira.agents.static_wiring import (
+from mira.agents.static.wiring import (
     STATIC_ROLE,
     STATIC_SCOPE,
     build_executor,

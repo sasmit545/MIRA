@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 from unittest.mock import AsyncMock
 
-from mira.agents.static_agent import StaticAgent
+from mira.agents.static.agent import StaticAgent
 from mira.mcp.client import StaticMCPClient
 from mira.contracts.requests import CapabilityRequest
 from mira.contracts.results import CapabilityResult

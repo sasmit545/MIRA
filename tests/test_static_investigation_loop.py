@@ -6,7 +6,7 @@ that evidence from one objective changes the next one.
 """
 
 from mira.agents.base import Specialist
-from mira.agents.static_agent import StaticAgent
+from mira.agents.static.agent import StaticAgent
 from mira.core.coordinator import StaticCoordinator
 from mira.reasoning.contracts.model import ModelResponse
 from mira.reasoning.contracts.tool import ToolCall
