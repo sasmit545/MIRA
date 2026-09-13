@@ -21,6 +21,32 @@ class Artifact:
     sha256: str
     parent_artifact_id: str | None = None
 
+    def to_dict(self) -> dict:
+        """Convert artifact to dictionary for serialization.
+
+        `path` is a Path, which JSON cannot carry, so it crosses as a string.
+        """
+        return {
+            "artifact_id": self.artifact_id,
+            "path": str(self.path),
+            "file_type": self.file_type,
+            "size": self.size,
+            "sha256": self.sha256,
+            "parent_artifact_id": self.parent_artifact_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Artifact":
+        """Create artifact from dictionary."""
+        return cls(
+            artifact_id=data["artifact_id"],
+            path=Path(data["path"]),
+            file_type=data["file_type"],
+            size=data["size"],
+            sha256=data["sha256"],
+            parent_artifact_id=data.get("parent_artifact_id"),
+        )
+
 
 class ArtifactStore:
     """Resolves artifact identifiers without exposing arbitrary file paths."""
@@ -79,7 +105,7 @@ def detect_file_type(path: Path) -> str:
             return "unknown"
         offset = int.from_bytes(header[0x3C:0x40], "little")
         artifact_file.seek(offset)
-        return "pe" if artifact_file.read(4) == b"PE\\0\\0" else "unknown"
+        return "pe" if artifact_file.read(4) == b"PE\x00\x00" else "unknown"
 
 
 def _hash_file(path: Path) -> str:

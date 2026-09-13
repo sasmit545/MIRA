@@ -1,4 +1,3 @@
-
 version: 2.1
 
 jobs:
@@ -7,20 +6,31 @@ jobs:
       - image: cimg/python:3.11
     steps:
       - checkout
+      - restore_cache:
+          keys:
+            - v1-pip-{{ checksum "pyproject.toml" }}
+            - v1-pip-
       - run:
           name: Install dependencies
           command: |
             python -m pip install --upgrade pip
-            pip install -e .
-            pip install pytest
+            pip install -e ".[dev]"
+      - save_cache:
+          paths:
+            - ~/.cache/pip
+          key: v1-pip-{{ checksum "pyproject.toml" }}
       - run:
           name: Run tests
           command: |
-            pytest tests/
+            pytest tests/ --junitxml=test-results.xml
+      - store_test_results:
+          path: test-results.xml
+      - store_artifacts:
+          path: test-results.xml
+          destination: test-results
 
 workflows:
   version: 2
   build_and_test:
     jobs:
       - build
-

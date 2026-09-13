@@ -1,6 +1,6 @@
 """Conservative packing/protection indicator detection."""
 
-from mira.artifacts import Artifact
+from mira.core.artifact import Artifact
 from mira.capabilities.static.common import result_ok
 from mira.capabilities.static.pe_support import load_pe
 
@@ -9,7 +9,7 @@ def detect_packer(artifact: Artifact) -> dict:
     pe, failure = load_pe(artifact, "detect_packer")
     if failure:
         return failure
-    names = {section.Name.rstrip(b"\\0").decode("ascii", errors="replace").upper() for section in pe.sections}
+    names = {section.Name.rstrip(b"\x00").decode("ascii", errors="replace").upper() for section in pe.sections}
     indicators = []
     packer = None
     if {"UPX0", "UPX1"}.issubset(names):

@@ -1,4 +1,8 @@
-"""Process isolation for static analysis of untrusted artifacts."""
+"""Process isolation for analysis of untrusted artifacts.
+
+Specialist-agnostic: a job names the module that knows how to run it, so this
+module never imports an analysis library or names a capability.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +15,7 @@ from queue import Empty
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from mira.artifacts import Artifact
+from mira.core.artifact import Artifact
 
 
 @dataclass(frozen=True)
@@ -32,6 +36,10 @@ class AnalysisJob:
     artifact: Artifact
     parameters: dict[str, Any]
     rulesets: dict[str, Path]
+    #: Dotted path to the specialist module whose `invoke(job)` runs this.
+    #: A string rather than a callable so it crosses the spawn boundary and
+    #: is imported in the child, keeping analysis libraries out of the parent.
+    dispatch: str
 
 
 @dataclass(frozen=True)
@@ -72,7 +80,7 @@ def run_isolated(job: AnalysisJob, limits: AnalysisLimits) -> ExecutionResult:
 def _worker(output, job: AnalysisJob, limits: AnalysisLimits) -> None:
     try:
         _apply_platform_limits(limits)
-        with TemporaryDirectory(prefix="mira-static-") as temporary_directory:
+        with TemporaryDirectory(prefix="mira-analysis-") as temporary_directory:
             with chdir(temporary_directory):
                 response = _invoke(job)
         output.put(response)
@@ -81,34 +89,14 @@ def _worker(output, job: AnalysisJob, limits: AnalysisLimits) -> None:
 
 
 def _invoke(job: AnalysisJob) -> dict:
-    from mira.capabilities.static.capa_analyzer import run_capa
-    from mira.capabilities.static.disassembler import disassemble_function
-    from mira.capabilities.static.entropy_analyzer import calculate_entropy
-    from mira.capabilities.static.export_lister import list_exports
-    from mira.capabilities.static.file_info import analyze_file_info
-    from mira.capabilities.static.function_analyzer import list_functions
-    from mira.capabilities.static.import_lister import list_imports
-    from mira.capabilities.static.packer_detector import detect_packer
-    from mira.capabilities.static.pe_analyzer import analyze_pe
-    from mira.capabilities.static.string_analyzer import extract_strings
-    from mira.capabilities.static.yara_scanner import scan_yara
+    """Hand the job to the specialist that owns it.
 
-    handlers = {
-        "file_info": analyze_file_info,
-        "analyze_pe": analyze_pe,
-        "list_imports": list_imports,
-        "list_exports": list_exports,
-        "extract_strings": extract_strings,
-        "calculate_entropy": calculate_entropy,
-        "detect_packer": detect_packer,
-        "scan_yara": scan_yara,
-        "run_capa": run_capa,
-        "list_functions": list_functions,
-        "disassemble_function": disassemble_function,
-    }
-    if job.capability == "scan_yara":
-        return handlers[job.capability](job.artifact, rulesets=job.rulesets, **job.parameters)
-    return handlers[job.capability](job.artifact, **job.parameters)
+    Imported here rather than at module scope so the analysis libraries load
+    in this child process only.
+    """
+    from importlib import import_module
+
+    return import_module(job.dispatch).invoke(job)
 
 
 def _apply_platform_limits(limits: AnalysisLimits) -> None:

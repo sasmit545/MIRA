@@ -33,7 +33,7 @@ class InvestigationState:
         """Add artifact to the state and update timestamp."""
         self.artifacts.append(artifact)
         self.updated_at = datetime.now()
-        self._log_state_change("artifact_added", {"artifact_id": artifact.id})
+        self._log_state_change("artifact_added", {"artifact_id": artifact.artifact_id})
 
     def add_hypothesis(self, hypothesis: Hypothesis):
         """Add hypothesis to the state and update timestamp."""
@@ -77,7 +77,7 @@ class InvestigationState:
     def get_artifact_by_id(self, artifact_id: str) -> Optional[Artifact]:
         """Get artifact by its ID."""
         for artifact in self.artifacts:
-            if artifact.id == artifact_id:
+            if artifact.artifact_id == artifact_id:
                 return artifact
         return None
 
@@ -114,12 +114,6 @@ class InvestigationState:
         """Create state from dictionary."""
         state = cls()
         state.sample = data.get("sample")
-
-        # Import here to avoid circular imports
-        from .evidence import Evidence
-        from .artifact import Artifact
-        from .hypothesis import Hypothesis
-        from .task import InvestigationTask
 
         state.artifacts = [Artifact.from_dict(a) for a in data.get("artifacts", [])]
         state.evidence = [Evidence.from_dict(e) for e in data.get("evidence", [])]

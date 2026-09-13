@@ -1,7 +1,8 @@
 import tempfile
 import os
 from pathlib import Path
-from mira.artifacts import ArtifactStore, ArtifactError
+from mira.core.artifact import ArtifactStore, ArtifactError
+
 
 def test_artifact_store():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -67,6 +68,7 @@ def test_artifact_store():
         print('File type detection returned "unknown" for text file')
 
         print("All tests passed!")
+
 
 if __name__ == "__main__":
     test_artifact_store()

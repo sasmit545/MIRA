@@ -1,6 +1,6 @@
 """PE header and section analysis, intentionally excluding import/export tables."""
 
-from mira.artifacts import Artifact
+from mira.core.artifact import Artifact
 from mira.capabilities.static.common import result_ok, shannon_entropy
 from mira.capabilities.static.pe_support import load_pe
 
@@ -14,7 +14,7 @@ def analyze_pe(artifact: Artifact) -> dict:
         raw_data = section.get_data()
         sections.append(
             {
-                "name": section.Name.rstrip(b"\\0").decode("ascii", errors="replace"),
+                "name": section.Name.rstrip(b"\x00").decode("ascii", errors="replace"),
                 "virtual_address": section.VirtualAddress,
                 "virtual_size": section.Misc_VirtualSize,
                 "raw_size": section.SizeOfRawData,

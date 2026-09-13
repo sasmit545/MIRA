@@ -1,6 +1,6 @@
 """Selected-function instruction decoding via optional Capstone."""
 
-from mira.artifacts import Artifact
+from mira.core.artifact import Artifact
 from mira.capabilities.static.common import result_error, result_ok
 from mira.capabilities.static.pe_support import load_pe
 

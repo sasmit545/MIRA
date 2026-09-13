@@ -1,5 +1,3 @@
-Yep 😄 — you meant **just the Markdown code block here**, not a file.
-
 ````md
 # Plan for Building Static MCP Server and Static-Only MIRA Vertical Slice
 

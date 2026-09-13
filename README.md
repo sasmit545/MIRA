@@ -429,7 +429,7 @@ Suppose MIRA receives:
 sample.exe
 ```
 
-### Step 1 — Static Investigation
+### Step 1 â€” Static Investigation
 
 The Coordinator selects the Static Agent.
 
@@ -455,7 +455,7 @@ The findings are added to the shared state.
 
 ---
 
-### Step 2 — Hypothesis Formation
+### Step 2 â€” Hypothesis Formation
 
 Based on the new evidence:
 
@@ -471,7 +471,7 @@ The Coordinator determines that runtime investigation is useful.
 
 ---
 
-### Step 3 — Dynamic Investigation
+### Step 3 â€” Dynamic Investigation
 
 The Coordinator selects the Dynamic Agent.
 
@@ -508,7 +508,7 @@ payload.bin
 
 ---
 
-### Step 4 — Hypothesis Update
+### Step 4 â€” Hypothesis Update
 
 The Coordinator updates the investigation state.
 
@@ -541,52 +541,52 @@ Recommended initial structure:
 
 ```text
 mira/
-¦
+Â¦
 +-- README.md
 +-- main.py
-¦
+Â¦
 +-- config/
-¦   +-- config.yaml
-¦
+Â¦   +-- config.yaml
+Â¦
 +-- core/
-¦   +-- coordinator.py
-¦   +-- investigation.py
-¦   +-- state.py
-¦   +-- evidence.py
-¦   +-- artifact.py
-¦   +-- hypothesis.py
-¦   +-- task.py
-¦
+Â¦   +-- coordinator.py
+Â¦   +-- investigation.py
+Â¦   +-- state.py
+Â¦   +-- evidence.py
+Â¦   +-- artifact.py
+Â¦   +-- hypothesis.py
+Â¦   +-- task.py
+Â¦
 +-- agents/
-¦   +-- base_agent.py
-¦   +-- static_agent.py
-¦   +-- dynamic_agent.py
-¦   +-- forensics_agent.py
-¦
+Â¦   +-- base_agent.py
+Â¦   +-- static_agent.py
+Â¦   +-- dynamic_agent.py
+Â¦   +-- forensics_agent.py
+Â¦
 +-- mcp/
-¦   +-- client.py
-¦   +-- capability_registry.py
-¦   +-- servers/
-¦
+Â¦   +-- client.py
+Â¦   +-- capability_registry.py
+Â¦   +-- servers/
+Â¦
 +-- capabilities/
-¦   +-- static/
-¦   +-- dynamic/
-¦   +-- forensics/
-¦
+Â¦   +-- static/
+Â¦   +-- dynamic/
+Â¦   +-- forensics/
+Â¦
 +-- storage/
-¦   +-- state_store.py
-¦   +-- artifacts/
-¦
+Â¦   +-- state_store.py
+Â¦   +-- artifacts/
+Â¦
 +-- prompts/
-¦   +-- coordinator.txt
-¦   +-- static_agent.txt
-¦   +-- dynamic_agent.txt
-¦   +-- forensics_agent.txt
-¦
+Â¦   +-- coordinator.txt
+Â¦   +-- static_agent.txt
+Â¦   +-- dynamic_agent.txt
+Â¦   +-- forensics_agent.txt
+Â¦
 +-- evaluation/
-¦   +-- metrics.py
-¦   +-- benchmark.py
-¦
+Â¦   +-- metrics.py
+Â¦   +-- benchmark.py
+Â¦
 +-- tests/
 ```
 
@@ -1025,48 +1025,48 @@ MIRA is an **adaptive investigation architecture**.
 
 ```text
                          MIRA
-                          ¦
+                          Â¦
                           ?
                  +-----------------+
-                 ¦   Coordinator   ¦
-                 ¦ Global Reasoning¦
+                 Â¦   Coordinator   Â¦
+                 Â¦ Global ReasoningÂ¦
                  +-----------------+
-                          ¦
+                          Â¦
                    Select Specialist
-                          ¦
+                          Â¦
             +-------------+-------------+
             ?             ?             ?
        +---------+   +---------+   +-----------+
-       ¦ Static  ¦   ¦ Dynamic ¦   ¦ Forensics ¦
-       ¦  Agent  ¦   ¦  Agent  ¦   ¦   Agent   ¦
+       Â¦ Static  Â¦   Â¦ Dynamic Â¦   Â¦ Forensics Â¦
+       Â¦  Agent  Â¦   Â¦  Agent  Â¦   Â¦   Agent   Â¦
        +---------+   +---------+   +-----------+
-            ¦             ¦              ¦
+            Â¦             Â¦              Â¦
             +-------------+--------------+
                           ?
                    +------------+
-                   ¦    MCP     ¦
-                   ¦Capabilities¦
+                   Â¦    MCP     Â¦
+                   Â¦CapabilitiesÂ¦
                    +------------+
                          ?
                    Analysis Tools
-                         ¦
+                         Â¦
                          ?
                 +------------------+
-                ¦ Investigation    ¦
-                ¦      State       ¦
-                +------------------¦
-                ¦ Evidence         ¦
-                ¦ Artifacts        ¦
-                ¦ Lineage          ¦
-                ¦ Hypotheses       ¦
-                ¦ Confidence       ¦
-                ¦ Tasks            ¦
+                Â¦ Investigation    Â¦
+                Â¦      State       Â¦
+                +------------------Â¦
+                Â¦ Evidence         Â¦
+                Â¦ Artifacts        Â¦
+                Â¦ Lineage          Â¦
+                Â¦ Hypotheses       Â¦
+                Â¦ Confidence       Â¦
+                Â¦ Tasks            Â¦
                 +------------------+
-                         ¦
-                         ¦ Feedback
+                         Â¦
+                         Â¦ Feedback
                          ?
                    Coordinator
-                         ¦
+                         Â¦
                          ?
                       NEXT STEP
 ```
@@ -1087,7 +1087,7 @@ If a component violates this separation, reconsider its responsibility.
 
 # 22. Development Roadmap
 
-## Phase 1 — Core Skeleton
+## Phase 1 â€” Core Skeleton
 
 - [ ] Create project structure
 - [ ] Define InvestigationState
@@ -1097,7 +1097,7 @@ If a component violates this separation, reconsider its responsibility.
 - [ ] Define Task
 - [ ] Implement investigation history
 
-## Phase 2 — Coordinator
+## Phase 2 â€” Coordinator
 
 - [ ] Coordinator state input
 - [ ] Next-investigation selection
@@ -1106,14 +1106,14 @@ If a component violates this separation, reconsider its responsibility.
 - [ ] Priority/reason generation
 - [ ] Stop/continue decision
 
-## Phase 3 — First Specialist
+## Phase 3 â€” First Specialist
 
 - [ ] BaseAgent
 - [ ] StaticAgent
 - [ ] Specialist reasoning loop
 - [ ] Structured output
 
-## Phase 4 — MCP
+## Phase 4 â€” MCP
 
 - [ ] MCP client
 - [ ] Capability registry
@@ -1121,7 +1121,7 @@ If a component violates this separation, reconsider its responsibility.
 - [ ] Structured tool result
 - [ ] Tool-call logging
 
-## Phase 5 — Feedback Loop
+## Phase 5 â€” Feedback Loop
 
 - [ ] Evidence ingestion
 - [ ] State update
@@ -1129,13 +1129,13 @@ If a component violates this separation, reconsider its responsibility.
 - [ ] Coordinator re-evaluation
 - [ ] Next-step selection
 
-## Phase 6 — Additional Specialists
+## Phase 6 â€” Additional Specialists
 
 - [ ] DynamicAgent
 - [ ] ForensicsAgent
 - [ ] Specialist-specific capabilities
 
-## Phase 7 — Evaluation
+## Phase 7 â€” Evaluation
 
 - [ ] Fixed pipeline baseline
 - [ ] Single-agent baseline
@@ -1152,11 +1152,11 @@ MIRA should behave like an autonomous malware investigation team:
 
 ```text
                     +-------------+
-                    ¦   Malware   ¦
+                    Â¦   Malware   Â¦
                     +-------------+
                            ?
                     +-------------+
-                    ¦    MIRA     ¦
+                    Â¦    MIRA     Â¦
                     +-------------+
                            ?
                  Investigate ? Observe
