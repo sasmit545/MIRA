@@ -18,7 +18,6 @@ def test_is_active_max_turns():
     agent_def = AgentDefinition(
         role="Test role.",
         scope="Test scope.",
-        instructions="Test",
         tool_manifest=[],
         allowed_tools=[],
         max_turns=5,
@@ -36,7 +35,6 @@ def test_is_active_max_tool_calls():
     agent_def = AgentDefinition(
         role="Test role.",
         scope="Test scope.",
-        instructions="Test",
         tool_manifest=[],
         allowed_tools=[],
         max_turns=100,
@@ -53,7 +51,6 @@ def test_is_active_consecutive_empty_responses():
     agent_def = AgentDefinition(
         role="Test role.",
         scope="Test scope.",
-        instructions="Test",
         tool_manifest=[],
         allowed_tools=[],
         max_turns=100,

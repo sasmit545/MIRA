@@ -8,6 +8,7 @@ in the reasoning package.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 from mira.core.artifact import ArtifactStore
@@ -25,16 +26,28 @@ STATIC_SCOPE = (
 )
 
 
-def tool_manifest() -> list[ToolSpec]:
-    """Expose the registered MCP capabilities as tool specs for the model."""
-    return [
+@lru_cache(maxsize=None)
+def _capability_specs() -> tuple[ToolSpec, ...]:
+    """Build the specs once.
+
+    `input_schema` is a pydantic `model_json_schema()`, which is regenerated
+    on every access, and a specialist rebuilds the manifest for each objective
+    it is assigned. STATIC_CAPABILITIES is fixed at import, so the result is
+    stable.
+    """
+    return tuple(
         ToolSpec(
             name=definition.name,
             description=definition.description,
             parameters=definition.input_schema,
         )
         for definition in STATIC_CAPABILITIES.values()
-    ]
+    )
+
+
+def tool_manifest() -> list[ToolSpec]:
+    """Expose the registered MCP capabilities as tool specs for the model."""
+    return list(_capability_specs())
 
 
 def build_client(sample_path: Path) -> tuple[StaticMCPClient, str]:

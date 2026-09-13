@@ -96,7 +96,6 @@ class StaticAgent:
         agent_definition = AgentDefinition(
             role=STATIC_ROLE,
             scope=STATIC_SCOPE,
-            instructions=objective.description,
             tool_manifest=manifest,
             allowed_tools=permitted,
             max_turns=self._max_turns,

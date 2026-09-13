@@ -115,12 +115,6 @@ class InvestigationState:
         state = cls()
         state.sample = data.get("sample")
 
-        # Import here to avoid circular imports
-        from .evidence import Evidence
-        from .artifact import Artifact
-        from .hypothesis import Hypothesis
-        from .task import InvestigationTask
-
         state.artifacts = [Artifact.from_dict(a) for a in data.get("artifacts", [])]
         state.evidence = [Evidence.from_dict(e) for e in data.get("evidence", [])]
         state.hypotheses = [Hypothesis.from_dict(h) for h in data.get("hypotheses", [])]

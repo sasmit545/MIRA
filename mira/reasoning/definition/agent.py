@@ -17,7 +17,6 @@ class AgentDefinition:
     """
     role: str  # the investigator identity the model is asked to adopt
     scope: str  # what this specialist may investigate, and what it may not
-    instructions: str
     tool_manifest: List[ToolSpec]  # what exists
     allowed_tools: List[ToolSpec]  # what is permitted this run (subset of manifest)
     max_turns: int

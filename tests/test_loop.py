@@ -31,7 +31,6 @@ def build_definition(tools=(), max_turns=10, max_tool_calls=10):
     return AgentDefinition(
         role="You are a test investigator.",
         scope="Test scope only.",
-        instructions="Test instructions",
         tool_manifest=list(tools),
         allowed_tools=list(tools),
         max_turns=max_turns,

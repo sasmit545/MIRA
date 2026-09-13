@@ -16,7 +16,6 @@ def build_definition(role=ROLE, scope=SCOPE):
     return AgentDefinition(
         role=role,
         scope=scope,
-        instructions="Test instructions",
         tool_manifest=[SPEC],
         allowed_tools=[SPEC],
         max_turns=10,

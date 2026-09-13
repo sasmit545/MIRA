@@ -51,7 +51,6 @@ async def investigate(
     agent_def = AgentDefinition(
         role=STATIC_ROLE,
         scope=STATIC_SCOPE,
-        instructions="Static malware investigator.",
         tool_manifest=manifest,
         allowed_tools=manifest,
         max_turns=max_turns,

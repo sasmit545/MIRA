@@ -33,12 +33,6 @@ class InvestigationTask:
         self.timestamp = datetime.now()
         self.updated_at = datetime.now()
 
-    def is_ready(self, completed_task_ids: List[str]) -> bool:
-        """A task is ready once every task it depends on has completed."""
-        return self.status == PENDING and all(
-            task_id in completed_task_ids for task_id in self.depends_on
-        )
-
     def to_dict(self) -> dict:
         """Convert task to dictionary for serialization."""
         return {
