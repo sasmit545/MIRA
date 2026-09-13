@@ -80,17 +80,52 @@ class ModelAdapter:
         return _from_text("".join(getattr(part, "text", "") or "" for part in parts))
 
 
-def declarations(tools: List[Any]) -> list[dict]:
-    """Declare capabilities to the provider, plus the report pseudo-tool.
+# Supplied by the runtime, never by the model. artifact_id in particular is
+# bound by build_executor so the model cannot retarget another sample.
+BOUND_FIELDS = ("artifact_id", "contract_version")
 
-    Capabilities take no parameters: the runtime binds the artifact, so the
-    model only ever chooses which capability to run.
+# The provider's function-declaration schema is a narrow subset of JSON
+# Schema; anything else (title, default, additionalProperties) is rejected.
+DECLARABLE_KEYS = ("type", "description", "enum", "items", "minimum", "maximum")
+
+
+def tool_parameters(schema: dict) -> dict:
+    """Reshape a capability's pydantic schema into a function declaration.
+
+    Without this the model is told every capability takes no arguments, so
+    required ones like disassemble_function's function_address can never be
+    supplied and the call fails validation every time.
     """
+    properties = {
+        name: _declarable(field)
+        for name, field in schema.get("properties", {}).items()
+        if name not in BOUND_FIELDS
+    }
+    required = [
+        name for name in schema.get("required", []) if name not in BOUND_FIELDS
+    ]
+    declared = {"type": "object", "properties": properties}
+    if required:
+        declared["required"] = required
+    return declared
+
+
+def _declarable(field: dict) -> dict:
+    """Flatten Optional[X] to X, then keep only keys the provider accepts."""
+    for option in field.get("anyOf", []):
+        if option.get("type") != "null":
+            field = {**option, "description": field.get("description", "")}
+            break
+    return {key: value for key, value in field.items() if key in DECLARABLE_KEYS}
+
+
+def declarations(tools: List[Any]) -> list[dict]:
+    """Declare capabilities to the provider, plus the report pseudo-tool."""
     declared = [
         {
             "name": spec.name,
             "description": spec.description,
-            "parameters": {"type": "object", "properties": {}},
+            "parameters": tool_parameters(spec.parameters),
         }
         for spec in tools
     ]

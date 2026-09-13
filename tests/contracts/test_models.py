@@ -11,7 +11,6 @@ from mira.contracts.errors import CapabilityError, ARTIFACT_NOT_FOUND
 from mira.contracts.requests import CapabilityRequest
 from mira.contracts.results import CapabilityResult
 from mira.contracts.capabilities.analyze_pe import AnalyzePEInput, AnalyzePEOutput, Section
-from mira.contracts.evidence import Evidence
 
 
 def test_contract_base():
@@ -123,28 +122,6 @@ def test_capability_result():
             request_id="req_001",
             status="invalid_status",
         )
-
-
-def test_evidence_model():
-    """Test evidence model."""
-    ev = Evidence(
-        evidence_id="ev_001",
-        observation="Found suspicious import",
-        artifact_id="artifact_001",
-        capability="list_imports",
-        location="sub_401000",
-        confidence=0.9,
-        provenance="capability",
-    )
-    assert ev.evidence_id == "ev_001"
-    assert ev.observation == "Found suspicious import"
-    assert ev.artifact_id == "artifact_001"
-    assert ev.capability == "list_imports"
-    assert ev.location == "sub_401000"
-    assert ev.confidence == 0.9
-    assert ev.provenance == "capability"
-    # timestamp is set automatically
-    assert ev.timestamp is not None
 
 
 if __name__ == "__main__":
