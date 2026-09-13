@@ -10,8 +10,8 @@ from mira.agents.static.agent import StaticAgent
 from mira.mcp.client import StaticMCPClient
 from mira.contracts.requests import CapabilityRequest
 from mira.contracts.results import CapabilityResult
-from mira.contracts.capabilities.analyze_pe import AnalyzePEInput, AnalyzePEOutput, Section
-from mira.contracts.capabilities.list_imports import ListImportsInput, ListImportsOutput
+from mira.contracts.capabilities.static.analyze_pe import AnalyzePEInput, AnalyzePEOutput, Section
+from mira.contracts.capabilities.static.list_imports import ListImportsInput, ListImportsOutput
 
 
 class MockTransport:

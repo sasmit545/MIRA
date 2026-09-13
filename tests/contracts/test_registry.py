@@ -4,7 +4,7 @@ Test capability registry.
 from __future__ import annotations
 
 from mira.mcp.capability_registry import STATIC_CAPABILITIES
-from mira.contracts.capabilities.analyze_pe import AnalyzePEInput, AnalyzePEOutput
+from mira.contracts.capabilities.static.analyze_pe import AnalyzePEInput, AnalyzePEOutput
 
 
 def test_capability_registry_has_expected_capabilities():

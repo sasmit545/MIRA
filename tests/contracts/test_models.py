@@ -10,7 +10,7 @@ from mira.contracts.common import Contract
 from mira.contracts.errors import CapabilityError, ARTIFACT_NOT_FOUND
 from mira.contracts.requests import CapabilityRequest
 from mira.contracts.results import CapabilityResult
-from mira.contracts.capabilities.analyze_pe import (
+from mira.contracts.capabilities.static.analyze_pe import (
     AnalyzePEInput,
     AnalyzePEOutput,
     CoffHeader,

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 from mira.mcp.client import StaticMCPClient
 from mira.contracts.requests import CapabilityRequest
 from mira.contracts.results import CapabilityResult
-from mira.contracts.capabilities.analyze_pe import AnalyzePEInput, AnalyzePEOutput, Section
+from mira.contracts.capabilities.static.analyze_pe import AnalyzePEInput, AnalyzePEOutput, Section
 
 
 class MockTransport:

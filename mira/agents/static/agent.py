@@ -13,8 +13,8 @@ from mira.agents.static.wiring import (
     build_executor,
     tool_manifest,
 )
-from mira.contracts.capabilities.analyze_pe import AnalyzePEInput, AnalyzePEOutput
-from mira.contracts.capabilities.list_imports import ListImportsInput, ListImportsOutput
+from mira.contracts.capabilities.static.analyze_pe import AnalyzePEInput, AnalyzePEOutput
+from mira.contracts.capabilities.static.list_imports import ListImportsInput, ListImportsOutput
 from mira.contracts.requests import CapabilityRequest
 from mira.contracts.results import CapabilityResult
 from mira.core.objective import InvestigationObjective

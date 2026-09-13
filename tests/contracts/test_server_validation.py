@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 from mira.mcp.servers.static_server import StaticMCPServer
 from mira.core.artifact import ArtifactStore, ArtifactError
 from mira.mcp.isolation import AnalysisJob, AnalysisLimits, ExecutionResult
-from mira.contracts.capabilities.analyze_pe import AnalyzePEInput, AnalyzePEOutput
-from mira.contracts.capabilities.list_imports import ListImportsInput, ListImportsOutput
+from mira.contracts.capabilities.static.analyze_pe import AnalyzePEInput, AnalyzePEOutput
+from mira.contracts.capabilities.static.list_imports import ListImportsInput, ListImportsOutput
 from mira.contracts.errors import ARTIFACT_NOT_FOUND, CONTRACT_VIOLATION, INVALID_INPUT
 from mira.mcp.capability_registry import STATIC_CAPABILITIES
 

@@ -4,17 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from mira.contracts.capabilities.analyze_pe import AnalyzePEInput, AnalyzePEOutput
-from mira.contracts.capabilities.entropy import CalculateEntropyInput, CalculateEntropyOutput
-from mira.contracts.capabilities.capa import RunCapaInput, RunCapaOutput
-from mira.contracts.capabilities.disassembly import DisassembleFunctionInput, DisassembleFunctionOutput
-from mira.contracts.capabilities.exports import ListExportsInput, ListExportsOutput
-from mira.contracts.capabilities.file_info import FileInfoInput, FileInfoOutput
-from mira.contracts.capabilities.functions import ListFunctionsInput, ListFunctionsOutput
-from mira.contracts.capabilities.list_imports import ListImportsInput, ListImportsOutput
-from mira.contracts.capabilities.packer import DetectPackerInput, DetectPackerOutput
-from mira.contracts.capabilities.scan_yara import ScanYaraInput, ScanYaraOutput
-from mira.contracts.capabilities.strings import ExtractStringsInput, ExtractStringsOutput
+from mira.contracts.capabilities.static.analyze_pe import AnalyzePEInput, AnalyzePEOutput
+from mira.contracts.capabilities.static.entropy import CalculateEntropyInput, CalculateEntropyOutput
+from mira.contracts.capabilities.static.capa import RunCapaInput, RunCapaOutput
+from mira.contracts.capabilities.static.disassembly import DisassembleFunctionInput, DisassembleFunctionOutput
+from mira.contracts.capabilities.static.exports import ListExportsInput, ListExportsOutput
+from mira.contracts.capabilities.static.file_info import FileInfoInput, FileInfoOutput
+from mira.contracts.capabilities.static.functions import ListFunctionsInput, ListFunctionsOutput
+from mira.contracts.capabilities.static.list_imports import ListImportsInput, ListImportsOutput
+from mira.contracts.capabilities.static.packer import DetectPackerInput, DetectPackerOutput
+from mira.contracts.capabilities.static.scan_yara import ScanYaraInput, ScanYaraOutput
+from mira.contracts.capabilities.static.strings import ExtractStringsInput, ExtractStringsOutput
 from pydantic import BaseModel
 
 
