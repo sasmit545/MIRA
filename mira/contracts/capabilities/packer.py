@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import Field
 
@@ -12,6 +12,7 @@ class DetectPackerInput(Contract):
 
 
 class DetectPackerOutput(Contract):
+    packed: bool = Field(..., description="Whether any packing indicator was found")
     packer: Optional[str] = Field(None, description="Detected packer name")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence in detection")
-    details: Optional[dict] = Field(None, description="Additional details")
+    indicators: List[str] = Field(..., description="Human-readable packing indicators")

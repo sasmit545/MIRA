@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 from pydantic import Field
 
@@ -11,7 +11,6 @@ class YaraMatch(Contract):
     rule: str
     namespace: str
     tags: List[str]
-    meta: dict
 
 
 class ScanYaraInput(Contract):
@@ -23,6 +22,3 @@ class ScanYaraInput(Contract):
 
 class ScanYaraOutput(Contract):
     matches: List[YaraMatch] = Field(..., description="YARA matches")
-    total: int = Field(..., description="Total number of matches available")
-    limit: int = Field(..., description="Limit used for this query")
-    offset: int = Field(..., description="Offset used for this query")

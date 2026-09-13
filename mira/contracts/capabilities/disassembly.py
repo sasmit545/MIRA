@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 from pydantic import Field
 
@@ -9,8 +9,9 @@ from mira.contracts.common import Contract
 
 class Instruction(Contract):
     address: int = Field(..., description="Instruction address")
+    bytes: str = Field(..., description="Raw instruction bytes, hex encoded")
     mnemonic: str = Field(..., description="Assembly mnemonic")
-    op_str: str = Field(..., description="Operands string")
+    operands: str = Field(..., description="Operands string")
 
 
 class DisassembleFunctionInput(Contract):
@@ -22,7 +23,6 @@ class DisassembleFunctionInput(Contract):
 
 
 class DisassembleFunctionOutput(Contract):
+    function_address: int = Field(..., description="Address that was disassembled")
+    architecture: str = Field(..., description="Decoding mode used, x86 or x64")
     instructions: List[Instruction] = Field(..., description="Disassembled instructions")
-    total: int = Field(..., description="Total number of instructions available")
-    limit: int = Field(..., description="Limit used for this query")
-    offset: int = Field(..., description="Offset used for this query")

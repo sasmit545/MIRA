@@ -10,8 +10,9 @@ class FileInfoInput(Contract):
 
 
 class FileInfoOutput(Contract):
+    file_type: str = Field(..., description="Detected artifact type, e.g. pe or unknown")
     size: int = Field(..., description="Size in bytes")
-    mime_type: str = Field(..., description="MIME type")
     md5: str = Field(..., description="MD5 hash")
     sha1: str = Field(..., description="SHA-1 hash")
     sha256: str = Field(..., description="SHA-256 hash")
+    entropy: float = Field(..., description="Whole-file Shannon entropy")

@@ -10,7 +10,13 @@ from mira.contracts.common import Contract
 from mira.contracts.errors import CapabilityError, ARTIFACT_NOT_FOUND
 from mira.contracts.requests import CapabilityRequest
 from mira.contracts.results import CapabilityResult
-from mira.contracts.capabilities.analyze_pe import AnalyzePEInput, AnalyzePEOutput, Section
+from mira.contracts.capabilities.analyze_pe import (
+    AnalyzePEInput,
+    AnalyzePEOutput,
+    CoffHeader,
+    OptionalHeader,
+    Section,
+)
 
 
 def test_contract_base():
@@ -39,15 +45,19 @@ def test_analyze_pe_models():
         name=".text",
         virtual_address=0x1000,
         virtual_size=0x200,
-        raw_data_pointer=0x400,
-        raw_data_size=0x200,
+        raw_size=0x200,
         characteristics=0x60000020,
+        entropy=6.1,
     )
     out = AnalyzePEOutput(
         architecture="x64",
+        coff_header=CoffHeader(machine=0x8664, characteristics=0x22),
+        optional_header=OptionalHeader(
+            magic=0x20B, image_base=0x140000000, subsystem=3, dll_characteristics=0x8160
+        ),
         entry_point=0x2000,
-        image_base=0x10000,
         sections=[sec],
+        overlay_size=0,
     )
     assert out.architecture == "x64"
     assert len(out.sections) == 1
@@ -81,15 +91,19 @@ def test_capability_result():
         name=".text",
         virtual_address=0x1000,
         virtual_size=0x200,
-        raw_data_pointer=0x400,
-        raw_data_size=0x200,
+        raw_size=0x200,
         characteristics=0x60000020,
+        entropy=6.1,
     )
     out = AnalyzePEOutput(
         architecture="x64",
+        coff_header=CoffHeader(machine=0x8664, characteristics=0x22),
+        optional_header=OptionalHeader(
+            magic=0x20B, image_base=0x140000000, subsystem=3, dll_characteristics=0x8160
+        ),
         entry_point=0x2000,
-        image_base=0x10000,
         sections=[sec],
+        overlay_size=0,
     )
     res = CapabilityResult[AnalyzePEOutput](
         request_id="req_001",

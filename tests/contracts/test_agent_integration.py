@@ -27,9 +27,9 @@ class MockTransport:
                 "name": ".text",
                 "virtual_address": 0x1000,
                 "virtual_size": 0x200,
-                "raw_data_pointer": 0x400,
-                "raw_data_size": 0x200,
+                "raw_size": 0x200,
                 "characteristics": 0x60000020,
+                "entropy": 6.1,
             }
             return {
                 "contract_version": "1.0",
@@ -37,9 +37,16 @@ class MockTransport:
                 "status": "ok",
                 "data": {
                     "architecture": "x64",
+                    "coff_header": {"machine": 0x8664, "characteristics": 0x22},
+                    "optional_header": {
+                        "magic": 0x20B,
+                        "image_base": 0x140000000,
+                        "subsystem": 3,
+                        "dll_characteristics": 0x8160,
+                    },
                     "entry_point": 0x2000,
-                    "image_base": 0x10000,
                     "sections": [sec_dict],
+                    "overlay_size": 0,
                 },
                 "error": None,
                 "metadata": {},
@@ -49,12 +56,7 @@ class MockTransport:
                 "contract_version": "1.0",
                 "request_id": payload["request_id"],
                 "status": "ok",
-                "data": {
-                    "entries": [],
-                    "total": 0,
-                    "limit": payload["input"]["limit"],
-                    "offset": payload["input"]["offset"],
-                },
+                "data": {"imports": []},
                 "error": None,
                 "metadata": {},
             }
@@ -100,7 +102,7 @@ async def test_static_agent_analyze_pe():
     assert isinstance(result.data, AnalyzePEOutput)
     assert result.data.architecture == "x64"
     assert result.data.entry_point == 0x2000
-    assert result.data.image_base == 0x10000
+    assert result.data.optional_header.image_base == 0x140000000
     assert len(result.data.sections) == 1
     assert result.data.sections[0].name == ".text"
 
@@ -130,10 +132,7 @@ async def test_static_agent_list_imports():
     assert result.status == "ok"
     assert result.data is not None
     assert isinstance(result.data, ListImportsOutput)
-    assert result.data.total == 0
-    assert result.data.limit == 50
-    assert result.data.offset == 10
-    assert len(result.data.entries) == 0
+    assert result.data.imports == []
 
 
 if __name__ == "__main__":

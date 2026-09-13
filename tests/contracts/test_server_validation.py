@@ -11,8 +11,30 @@ from mira.core.artifact import ArtifactStore, ArtifactError
 from mira.mcp.isolation import AnalysisJob, AnalysisLimits, ExecutionResult
 from mira.contracts.capabilities.analyze_pe import AnalyzePEInput, AnalyzePEOutput
 from mira.contracts.capabilities.list_imports import ListImportsInput, ListImportsOutput
-from mira.contracts.errors import ARTIFACT_NOT_FOUND, INVALID_INPUT
+from mira.contracts.errors import ARTIFACT_NOT_FOUND, CONTRACT_VIOLATION, INVALID_INPUT
 from mira.mcp.capability_registry import STATIC_CAPABILITIES
+
+# What analyze_pe actually returns, matching mira/capabilities/static/pe_analyzer.py.
+ANALYZE_PE_DATA = {
+    "architecture": "x64",
+    "coff_header": {"machine": 0x8664, "characteristics": 0x22},
+    "optional_header": {
+        "magic": 0x20B,
+        "image_base": 0x140000000,
+        "subsystem": 3,
+        "dll_characteristics": 0x8160,
+    },
+    "entry_point": 0x2000,
+    "sections": [{
+        "name": ".text",
+        "virtual_address": 0x1000,
+        "virtual_size": 0x200,
+        "raw_size": 0x200,
+        "characteristics": 0x60000020,
+        "entropy": 6.1,
+    }],
+    "overlay_size": 0,
+}
 
 
 class MockArtifactStore(ArtifactStore):
@@ -105,22 +127,7 @@ def test_static_server_validation_invalid_input():
 def test_static_server_valid_request():
     """Test that server processes valid request and calls runner."""
     server = StaticMCPServer(MockArtifactStore())
-    mock_result = ExecutionResult(
-        status="ok",
-        response={
-            "architecture": "x64",
-            "entry_point": 0x2000,
-            "image_base": 0x10000,
-            "sections": [{
-                "name": ".text",
-                "virtual_address": 0x1000,
-                "virtual_size": 0x200,
-                "raw_data_pointer": 0x400,
-                "raw_data_size": 0x200,
-                "characteristics": 0x60000020,
-            }]
-        }
-    )
+    mock_result = ExecutionResult(status="ok", response=dict(ANALYZE_PE_DATA))
     runner = MockRunner(mock_result)
     server._runner = runner
     import asyncio
@@ -163,15 +170,7 @@ def test_static_server_pagination_validation():
         assert result["error"]["code"] == INVALID_INPUT
 
         # Test valid pagination
-        mock_result = ExecutionResult(
-            status="ok",
-            response={
-                "entries": [],
-                "total": 0,
-                "limit": 10,
-                "offset": 0
-            }
-        )
+        mock_result = ExecutionResult(status="ok", response={"imports": []})
         runner = MockRunner(mock_result)
         server._runner = runner
         
@@ -185,6 +184,35 @@ def test_static_server_pagination_validation():
         assert runner.called_with.parameters["offset"] == 0
 
     asyncio.run(run_test())
+
+
+def test_static_server_rejects_output_that_breaks_its_contract():
+    """A handler drifting from its declared output is a server bug, not a result."""
+    server = StaticMCPServer(MockArtifactStore())
+    server._runner = MockRunner(
+        ExecutionResult(status="ok", response={"architecture": "x64"})
+    )
+    import asyncio
+
+    result = asyncio.run(server.call("analyze_pe", {"artifact_id": "artifact_001"}))
+
+    assert result["status"] == "error"
+    assert result["error"]["code"] == CONTRACT_VIOLATION
+
+
+def test_static_server_rejects_undeclared_output_fields():
+    """extra='forbid' means a handler cannot quietly add a field either."""
+    server = StaticMCPServer(MockArtifactStore())
+    server._runner = MockRunner(
+        ExecutionResult(status="ok", response={**ANALYZE_PE_DATA, "surprise": 1})
+    )
+    import asyncio
+
+    result = asyncio.run(server.call("analyze_pe", {"artifact_id": "artifact_001"}))
+
+    assert result["status"] == "error"
+    assert result["error"]["code"] == CONTRACT_VIOLATION
+    assert "surprise" in result["error"]["message"]
 
 
 if __name__ == "__main__":

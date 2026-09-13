@@ -53,9 +53,14 @@ class StaticMCPServer:
         if execution.status == "ok":
             if execution.response is None:
                 return result_error(artifact.artifact_id, capability, "ANALYSIS_FAILED", "analysis returned no result")
-            if "status" in execution.response:
-                return execution.response
-            return {"status": "ok", "data": execution.response}
+            response = execution.response
+            if "status" not in response:
+                response = {"status": "ok", "data": response}
+            if response.get("status") == "ok":
+                violation = _output_violation(capability, response.get("data"))
+                if violation:
+                    return result_error(artifact.artifact_id, capability, "CONTRACT_VIOLATION", violation)
+            return response
         if execution.status == "timeout":
             return result_error(artifact.artifact_id, capability, "TIMEOUT", execution.message or "analysis timed out")
         if execution.status == "resource_limit":
@@ -80,6 +85,20 @@ class StaticMCPServer:
         # Exclude artifact_id from parameters for the job
         parameters = validated_input.model_dump(exclude={"artifact_id", "contract_version"})
         return artifact, parameters, None
+
+
+def _output_violation(capability: str, data: Any) -> str | None:
+    """Check a handler's payload against the output contract it advertises.
+
+    A handler that drifts from its declared output is a server bug, not a
+    result: passing it through would publish an output_schema that lies about
+    what callers actually receive.
+    """
+    try:
+        STATIC_CAPABILITIES[capability].output_model(**(data or {}))
+    except ValidationError as error:
+        return _validation_message(error)
+    return None
 
 
 def _validation_message(error: ValidationError) -> str:

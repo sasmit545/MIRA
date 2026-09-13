@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 from pydantic import Field
 
@@ -20,7 +20,6 @@ class RunCapaInput(Contract):
 
 
 class RunCapaOutput(Contract):
+    # Never produced yet: the handler always reports TOOL_NOT_AVAILABLE, and
+    # output validation only runs on an ok envelope.
     findings: List[CAPAFinding] = Field(..., description="List of CAPA findings")
-    total: int = Field(..., description="Total number of findings available")
-    limit: int = Field(..., description="Limit used for this query")
-    offset: int = Field(..., description="Offset used for this query")

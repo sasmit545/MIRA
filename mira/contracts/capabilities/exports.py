@@ -8,9 +8,9 @@ from mira.contracts.common import Contract
 
 
 class ExportEntry(Contract):
-    name: str
-    address: int
+    name: Optional[str] = None
     ordinal: Optional[int] = None
+    address: int
 
 
 class ListExportsInput(Contract):
@@ -20,7 +20,5 @@ class ListExportsInput(Contract):
 
 
 class ListExportsOutput(Contract):
-    entries: List[ExportEntry] = Field(..., description="Export entries")
-    total: int = Field(..., description="Total number of exports available")
-    limit: int = Field(..., description="Limit used for this query")
-    offset: int = Field(..., description="Offset used for this query")
+    # Paging counters ride in the envelope's metadata, not here.
+    exports: List[ExportEntry] = Field(..., description="Export entries for this page")

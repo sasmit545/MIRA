@@ -9,9 +9,9 @@ from mira.contracts.common import Contract
 
 class ImportEntry(Contract):
     dll: str
-    name: str
-    address: int
+    name: Optional[str] = None
     ordinal: Optional[int] = None
+    address: int
 
 
 class ListImportsInput(Contract):
@@ -21,7 +21,6 @@ class ListImportsInput(Contract):
 
 
 class ListImportsOutput(Contract):
-    entries: List[ImportEntry] = Field(..., description="Import entries")
-    total: int = Field(..., description="Total number of imports available")
-    limit: int = Field(..., description="Limit used for this query")
-    offset: int = Field(..., description="Offset used for this query")
+    # Paging counters ride in the envelope's metadata, not here: result_ok
+    # receives them as **page and they never enter `data`.
+    imports: List[ImportEntry] = Field(..., description="Import entries for this page")

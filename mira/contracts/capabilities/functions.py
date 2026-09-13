@@ -8,9 +8,11 @@ from mira.contracts.common import Contract
 
 
 class Function(Contract):
-    name: str
     address: int
-    size: int
+    # Unknown without an analysis engine; the entry-point heuristic emits None.
+    size: Optional[int] = None
+    name: str
+    discovery_source: str
 
 
 class ListFunctionsInput(Contract):
@@ -20,7 +22,6 @@ class ListFunctionsInput(Contract):
 
 
 class ListFunctionsOutput(Contract):
-    functions: List[Function] = Field(..., description="List of functions")
-    total: int = Field(..., description="Total number of functions available")
-    limit: int = Field(..., description="Limit used for this query")
-    offset: int = Field(..., description="Offset used for this query")
+    # Paging counters ride in the envelope's metadata, not here.
+    functions: List[Function] = Field(..., description="Discovered functions for this page")
+    limitations: str = Field(..., description="What this discovery pass cannot see")
