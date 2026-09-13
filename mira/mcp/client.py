@@ -6,7 +6,7 @@ from typing import Protocol, TypeVar
 
 from mira.contracts.requests import CapabilityRequest
 from mira.contracts.results import CapabilityResult
-from mira.mcp.capability_registry import STATIC_CAPABILITIES
+from mira.mcp.servers.static.capabilities import STATIC_CAPABILITIES
 
 T = TypeVar('T')
 

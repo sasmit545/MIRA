@@ -3,7 +3,7 @@ Test capability registry.
 """
 from __future__ import annotations
 
-from mira.mcp.capability_registry import STATIC_CAPABILITIES
+from mira.mcp.servers.static.capabilities import STATIC_CAPABILITIES
 from mira.contracts.capabilities.static.analyze_pe import AnalyzePEInput, AnalyzePEOutput
 
 

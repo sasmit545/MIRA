@@ -12,9 +12,9 @@ from functools import lru_cache
 from pathlib import Path
 
 from mira.core.artifact import ArtifactStore
-from mira.mcp.capability_registry import STATIC_CAPABILITIES
+from mira.mcp.servers.static.capabilities import STATIC_CAPABILITIES
 from mira.mcp.client import StaticMCPClient
-from mira.mcp.servers.static_server import StaticMCPServer
+from mira.mcp.servers.static.server import StaticMCPServer
 from mira.reasoning.contracts.tool import ToolSpec
 
 ARTIFACT_ID = "sample"

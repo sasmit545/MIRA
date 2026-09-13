@@ -8,7 +8,7 @@ from mira.capabilities.static.file_info import analyze_file_info
 from mira.capabilities.static.string_analyzer import extract_strings
 from mira.mcp.client import StaticMCPClient
 from mira.mcp.isolation import AnalysisLimits, ExecutionResult
-from mira.mcp.servers.static_server import StaticMCPServer
+from mira.mcp.servers.static.server import StaticMCPServer
 
 
 class FileInfoTests(unittest.TestCase):

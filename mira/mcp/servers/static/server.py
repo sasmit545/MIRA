@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from mira.core.artifact import ArtifactError, ArtifactStore
 from mira.capabilities.static.common import result_error
-from mira.mcp.capability_registry import STATIC_CAPABILITIES
+from mira.mcp.servers.static.capabilities import DISPATCH, STATIC_CAPABILITIES
 from mira.mcp.isolation import AnalysisJob, AnalysisLimits, ExecutionResult, run_isolated
 from pydantic import ValidationError
 
@@ -47,7 +47,7 @@ class StaticMCPServer:
         artifact, parameters, error = self._validate(capability, payload)
         if error:
             return error
-        job = AnalysisJob(capability, artifact, parameters, self.rulesets)
+        job = AnalysisJob(capability, artifact, parameters, self.rulesets, DISPATCH)
         async with self._semaphore:
             execution = await asyncio.to_thread(self._runner, job, self.limits)
         if execution.status == "ok":

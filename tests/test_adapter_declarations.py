@@ -6,7 +6,7 @@ advertised every tool as taking none.
 
 from mira.agents.static.wiring import tool_manifest
 from mira.reasoning.model.adapter import declarations, tool_parameters
-from mira.mcp.capability_registry import STATIC_CAPABILITIES
+from mira.mcp.servers.static.capabilities import STATIC_CAPABILITIES
 
 
 def declared_by_name():

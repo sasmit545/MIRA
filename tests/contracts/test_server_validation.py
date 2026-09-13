@@ -6,13 +6,13 @@ from __future__ import annotations
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from mira.mcp.servers.static_server import StaticMCPServer
+from mira.mcp.servers.static.server import StaticMCPServer
 from mira.core.artifact import ArtifactStore, ArtifactError
 from mira.mcp.isolation import AnalysisJob, AnalysisLimits, ExecutionResult
 from mira.contracts.capabilities.static.analyze_pe import AnalyzePEInput, AnalyzePEOutput
 from mira.contracts.capabilities.static.list_imports import ListImportsInput, ListImportsOutput
 from mira.contracts.errors import ARTIFACT_NOT_FOUND, CONTRACT_VIOLATION, INVALID_INPUT
-from mira.mcp.capability_registry import STATIC_CAPABILITIES
+from mira.mcp.servers.static.capabilities import STATIC_CAPABILITIES
 
 # What analyze_pe actually returns, matching mira/capabilities/static/pe_analyzer.py.
 ANALYZE_PE_DATA = {
