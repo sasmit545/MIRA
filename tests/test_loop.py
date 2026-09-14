@@ -39,13 +39,14 @@ def build_definition(tools=(), max_turns=10, max_tool_calls=10):
     )
 
 
-def build_loop(model, tmp_path, tools=(), executor=None):
+def build_loop(model, tmp_path, tools=(), executor=None, on_turn=None):
     return AgentLoop(
         model,
         ToolRuntime(list(tools), executor),
         CompletionChecker(),
         ContextBuilder(),
         Tracer(run_id="test", output_dir=str(tmp_path)),
+        on_turn=on_turn,
     )
 
 
@@ -116,3 +117,30 @@ async def test_unknown_tool_is_observed(tmp_path):
     result = await loop.run(Objective(description="Test objective"), build_definition())
 
     assert "Unknown tool" in result.evidence[0].error
+
+
+async def test_on_turn_sees_each_tool_call_and_the_final_report(tmp_path):
+    spec = ToolSpec(name="probe", description="probes", parameters={})
+    model = ScriptedModel(
+        ModelResponse(tool_calls=[ToolCall(tool_call_id="1", name="probe", arguments={})]),
+        ModelResponse(report=REPORT),
+    )
+    events = []
+    loop = build_loop(
+        model, tmp_path, tools=[spec], executor=lambda name, arguments: "ok", on_turn=events.append
+    )
+
+    await loop.run(Objective(description="Test objective"), build_definition(tools=[spec]))
+
+    kinds = [event["kind"] for event in events]
+    assert kinds == ["tool_calls", "report"]
+    assert events[0]["calls"][0].name == "probe"
+
+
+async def test_a_broken_on_turn_callback_does_not_break_the_loop(tmp_path):
+    model = ScriptedModel(ModelResponse(report=REPORT))
+    loop = build_loop(model, tmp_path, on_turn=lambda event: 1 / 0)
+
+    result = await loop.run(Objective(description="Test objective"), build_definition())
+
+    assert result.completion_reason == "reported"

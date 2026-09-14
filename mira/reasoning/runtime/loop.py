@@ -1,7 +1,7 @@
 """Agent loop."""
 
 import json
-from typing import List
+from typing import Callable, List, Optional
 
 from ..contracts.model import ModelResponse
 from ..contracts.objective import Objective
@@ -28,12 +28,24 @@ class AgentLoop:
         completion_checker: CompletionChecker,
         context_builder: ContextBuilder,
         tracer: Tracer,
+        on_turn: Optional[Callable[[dict], None]] = None,
     ):
         self.model = model_adapter
         self.tools = tool_runtime
         self.completion = completion_checker
         self.context = context_builder
         self.tracer = tracer
+        self.on_turn = on_turn
+
+    def _notify(self, event: dict) -> None:
+        """Best-effort live view of the loop for a CLI or other observer.
+        Never lets a printer bug take down the investigation."""
+        if self.on_turn is None:
+            return
+        try:
+            self.on_turn(event)
+        except Exception:
+            pass
 
     async def run(
         self,
@@ -62,16 +74,19 @@ class AgentLoop:
                 self.completion.record_non_empty_response()
                 report, failure = self._parse_report(response.report, state, agent_def)
                 if report is not None:
+                    self._notify({"kind": "report", "turn": state.turn_count + 1, "report": report})
                     return report
                 # Validation failure is an observation the model can recover from.
                 self._record_report_failure(state, response.report, failure)
                 self.tracer.turn(context_str, response, [], [], state.snapshot(), token_usage=response.usage)
+                self._notify({"kind": "report_rejected", "turn": state.turn_count + 1, "failure": failure})
                 state.turn_count += 1
                 continue
 
             if not response.tool_calls:
                 self.completion.record_empty_response()
                 self.tracer.turn(context_str, response, [], [], state.snapshot(), token_usage=response.usage)
+                self._notify({"kind": "empty", "turn": state.turn_count + 1})
                 state.turn_count += 1
                 continue
 
@@ -87,6 +102,7 @@ class AgentLoop:
                 results.append(tool_result)
 
             self.tracer.turn(context_str, response, calls, results, state.snapshot(), token_usage=response.usage)
+            self._notify({"kind": "tool_calls", "turn": state.turn_count + 1, "calls": calls, "results": results, "usage": response.usage})
             state.turn_count += 1
 
         return FinalOutput(

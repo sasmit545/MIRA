@@ -40,10 +40,13 @@ async def investigate(
     model=None,
     max_turns: int = DEFAULT_MAX_TURNS,
     max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
+    on_turn=None,
 ) -> FinalOutput:
     """Compose the static agent and run one investigation.
 
     `model` defaults to the real provider adapter; tests inject a scripted one.
+    `on_turn`, when given, is called with an event dict after every turn - the
+    CLI uses it to print the model's reasoning live; left None it's silent.
     """
     client, artifact_id = build_client(sample_path)
     manifest = tool_manifest()
@@ -62,8 +65,27 @@ async def investigate(
         tool_runtime=ToolRuntime(manifest, build_executor(client, artifact_id)),
         tracer=build_tracer(run_id=sample_path.stem, trace_dir=trace_dir),
         model=model,
+        on_turn=on_turn,
     )
     return await loop.run(Objective(description=objective_text), agent_def)
+
+
+def _print_turn(event: dict) -> None:
+    """Live view of the loop for the CLI - one line per tool call, full detail
+    stays in the trace file."""
+    turn = event["turn"]
+    kind = event["kind"]
+    if kind == "tool_calls":
+        for call, result in zip(event["calls"], event["results"]):
+            args = ", ".join(f"{name}={value!r}" for name, value in call.arguments.items())
+            status = "ok" if result.success else f"error: {result.error}"
+            print(f"[turn {turn}] {call.name}({args}) -> {status}")
+    elif kind == "report_rejected":
+        print(f"[turn {turn}] report rejected: {event['failure']}")
+    elif kind == "empty":
+        print(f"[turn {turn}] (no tool call, no report)")
+    elif kind == "report":
+        print(f"[turn {turn}] report submitted: verdict={event['report'].verdict}")
 
 
 def main() -> None:
@@ -74,6 +96,7 @@ def main() -> None:
     parser.add_argument("--trace-dir", type=Path, default=Path("runs"))
     parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
     parser.add_argument("--max-tool-calls", type=int, default=DEFAULT_MAX_TOOL_CALLS)
+    parser.add_argument("--quiet", action="store_true", help="don't print each turn as it happens")
     arguments = parser.parse_args()
 
     output = asyncio.run(
@@ -83,15 +106,18 @@ def main() -> None:
             trace_dir=arguments.trace_dir,
             max_turns=arguments.max_turns,
             max_tool_calls=arguments.max_tool_calls,
+            on_turn=None if arguments.quiet else _print_turn,
         )
     )
 
+    print()
     print(f"verdict:   {output.verdict}")
     print(f"reason:    {output.completion_reason}")
     print(f"summary:   {output.summary}")
     print(f"findings:  {len(output.findings)}")
     print(f"tokens:    {output.metadata['total_tokens']} ({output.metadata['prompt_tokens']} prompt + {output.metadata['completion_tokens']} completion)")
     print(f"metadata:  {output.metadata}")
+    print(f"trace:     {arguments.trace_dir / f'trace_{arguments.sample.stem}.json'}")
 
 
 if __name__ == "__main__":

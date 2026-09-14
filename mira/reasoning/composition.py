@@ -41,12 +41,14 @@ def build_loop(
     tool_runtime: ToolRuntime,
     tracer: Tracer,
     model=None,
+    on_turn=None,
 ) -> AgentLoop:
     """Assemble the reasoning loop.
 
     `model` defaults to the real provider adapter; callers inject a scripted
     one in tests. The adapter is only constructed when no model is supplied,
-    so a scripted run needs no API key.
+    so a scripted run needs no API key. `on_turn`, when given, is called with
+    an event dict after every turn - a live view for a CLI.
     """
     return AgentLoop(
         model_adapter=model or ModelAdapter(),
@@ -54,4 +56,5 @@ def build_loop(
         completion_checker=CompletionChecker(),
         context_builder=ContextBuilder(),
         tracer=tracer,
+        on_turn=on_turn,
     )
