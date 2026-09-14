@@ -107,12 +107,13 @@ Agents exchange decisions and references, never raw tool output.
 
 ## What's actually built
 
-The **static-analysis vertical slice** runs end to end: an LLM-driven agent investigates a PE sample, freely choosing among 11 static-analysis tools, recovering from tool failures, and writing a full run trace.
+The **static-analysis vertical slice** runs end to end: an LLM-driven agent investigates a PE sample, freely choosing among 11 static-analysis tools, recovering from tool failures, and writing a full run trace. The CLI prints each tool call and its result live as the investigation runs, and reports the tokens spent (prompt/completion/total) alongside the final verdict.
 
 ```bash
 python -m mira.reasoning.main sample.exe \
     --objective "Identify suspicious behavior" \
     --max-turns 5 --max-tool-calls 5 --trace-dir runs
+    # --quiet to suppress the live per-turn output
 ```
 
 Everything above the line is the target architecture. Today, concretely:
@@ -179,7 +180,7 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-A plain clone leaves `rules/capa` and `rules/signature-base` empty — that's how submodules work. Without them, `run_capa`/`scan_yara` just report `TOOL_NOT_AVAILABLE`.
+A plain clone leaves `rules/capa` and `rules/signature-base` empty — that's how submodules work. If you skip `git submodule update --init`, the CLI fails immediately with a message telling you to run it, instead of `run_capa`/`scan_yara` silently degrading mid-investigation.
 
 ## Model
 
