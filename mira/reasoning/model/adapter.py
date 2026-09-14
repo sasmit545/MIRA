@@ -1,4 +1,4 @@
-"""Model provider adapter for Gemini.
+"""Model provider adapter for Azure AI Foundry, spoken over the OpenAI SDK.
 
 The only file that touches the provider SDK.
 """
@@ -7,66 +7,54 @@ import json
 import os
 from typing import Any, List, Optional
 
-# Try to import google.generativeai, but allow it to be missing for testing
-try:
-    import google.generativeai as genai
-    GENAI_AVAILABLE = True
-except ImportError:
-    genai = None  # type: ignore
-    GENAI_AVAILABLE = False
+from openai import OpenAI
 
 from ..contracts.model import ModelResponse
 from ..contracts.tool import ToolCall
 
-# Model names churn: `gemini-pro` and `gemini-2.5-flash` are both already
-# refused for new keys, and list_models() still advertises them. Verified
-# working 2026-09-11. Override with GEMINI_MODEL when this one is retired too.
-DEFAULT_MODEL = "gemini-3.6-flash"
+BASE_URL = "https://testingrpmtpm.services.ai.azure.com/openai/v1"
+DEFAULT_MODEL = "grok-4.6"
+MAX_TOKENS = 16384
 
 REPORT_TOOL = "submit_report"
 
 
 class ModelAdapter:
-    """Adapter for Gemini model provider."""
+    """Adapter for the Azure-hosted Grok deployment."""
 
     def __init__(self, api_key: Optional[str] = None):
-        if not GENAI_AVAILABLE:
-            self.model = None
-            self.model_name = DEFAULT_MODEL
-            return
         if api_key is None:
-            api_key = os.getenv("GOOGLE_API_KEY")
+            api_key = os.getenv("MODEL_API_KEY")
         if not api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable is not set")
-        genai.configure(api_key=api_key)
-        self.model_name = os.getenv("GEMINI_MODEL", DEFAULT_MODEL)
-        self.model = genai.GenerativeModel(self.model_name)
+            raise ValueError("MODEL_API_KEY environment variable is not set")
+        self.model_name = os.getenv("MODEL_NAME", DEFAULT_MODEL)
+        self.client = OpenAI(base_url=BASE_URL, api_key=api_key)
 
     def generate(self, context: str, tools: List[Any]) -> ModelResponse:
-        """Ask the model for its next move as a native function call."""
-        if not GENAI_AVAILABLE or self.model is None:
-            return ModelResponse()
-
+        """Ask the model for its next move as a native tool call."""
         # API failures deliberately propagate. Returning an empty response here
         # is indistinguishable from a model with nothing to say, which hides
         # 404s, auth failures, and quota errors behind a "degraded" exit.
-        response = self.model.generate_content(context, tools=declarations(tools))
+        # The SDK already retries 429s and connection errors on its own.
+        response = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=[{"role": "user", "content": context}],
+            tools=declarations(tools),
+            max_tokens=MAX_TOKENS,
+        )
 
-        parts = _parts(response)
+        message = response.choices[0].message
         calls: list[ToolCall] = []
-        for index, part in enumerate(parts):
-            call = getattr(part, "function_call", None)
-            if not (call and call.name):
-                continue
-            arguments = _plain(call.args) if call.args else {}
-            if call.name == REPORT_TOOL:
+        for call in message.tool_calls or []:
+            arguments = _arguments(call.function.arguments)
+            if call.function.name == REPORT_TOOL:
                 # The report rides the existing report path; findings default to
                 # empty so a terse submission still satisfies the output contract.
                 return ModelResponse(report=json.dumps({"findings": [], **arguments}))
             calls.append(
                 ToolCall(
-                    tool_call_id=f"{call.name}-{index}",
-                    name=call.name,
+                    tool_call_id=call.id,
+                    name=call.function.name,
                     arguments=arguments,
                 )
             )
@@ -74,23 +62,19 @@ class ModelAdapter:
         if calls:
             return ModelResponse(tool_calls=calls)
 
-        # No function call: fall back to a JSON report in plain text. Text the
-        # model spoke but we cannot use IS a real empty response — it can
-        # recover next turn — unlike an API failure, which raises above.
-        return _from_text("".join(getattr(part, "text", "") or "" for part in parts))
+        # No tool call: fall back to a JSON report in plain text. Text the model
+        # spoke but we cannot use IS a real empty response — it can recover next
+        # turn — unlike an API failure, which raises above.
+        return _from_text(message.content or "")
 
 
 # Supplied by the runtime, never by the model. artifact_id in particular is
 # bound by build_executor so the model cannot retarget another sample.
 BOUND_FIELDS = ("artifact_id", "contract_version")
 
-# The provider's function-declaration schema is a narrow subset of JSON
-# Schema; anything else (title, default, additionalProperties) is rejected.
-DECLARABLE_KEYS = ("type", "description", "enum", "items", "minimum", "maximum")
-
 
 def tool_parameters(schema: dict) -> dict:
-    """Reshape a capability's pydantic schema into a function declaration.
+    """Reshape a capability's pydantic schema into a tool declaration.
 
     Without this the model is told every capability takes no arguments, so
     required ones like disassemble_function's function_address can never be
@@ -111,12 +95,15 @@ def tool_parameters(schema: dict) -> dict:
 
 
 def _declarable(field: dict) -> dict:
-    """Flatten Optional[X] to X, then keep only keys the provider accepts."""
+    """Flatten Optional[X] to X.
+
+    A bare type reads more clearly to the model than an anyOf with a null
+    branch, and nothing downstream distinguishes "absent" from "null".
+    """
     for option in field.get("anyOf", []):
         if option.get("type") != "null":
-            field = {**option, "description": field.get("description", "")}
-            break
-    return {key: value for key, value in field.items() if key in DECLARABLE_KEYS}
+            return {**option, "description": field.get("description", "")}
+    return field
 
 
 def declarations(tools: List[Any]) -> list[dict]:
@@ -156,28 +143,16 @@ def declarations(tools: List[Any]) -> list[dict]:
             },
         }
     )
-    return [{"function_declarations": declared}]
+    return [{"type": "function", "function": function} for function in declared]
 
 
-def _parts(response: Any) -> list:
-    """Reach the response parts without touching `.text`, which raises on a
-    function_call part."""
-    candidates = getattr(response, "candidates", None) or []
-    if not candidates:
-        return []
-    content = getattr(candidates[0], "content", None)
-    return list(getattr(content, "parts", None) or [])
-
-
-def _plain(value: Any) -> Any:
-    """Convert provider proto containers into plain JSON-serializable values."""
-    if isinstance(value, (str, bytes, int, float, bool)) or value is None:
-        return value
-    if hasattr(value, "items"):
-        return {key: _plain(item) for key, item in value.items()}
-    if hasattr(value, "__iter__"):
-        return [_plain(item) for item in value]
-    return value
+def _arguments(raw: str | None) -> dict:
+    """Tool arguments arrive as a JSON string; a model can still send junk."""
+    try:
+        parsed = json.loads(raw or "{}")
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _from_text(text: str) -> ModelResponse:
