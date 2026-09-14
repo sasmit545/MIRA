@@ -76,9 +76,35 @@ def _configured_capa_rules_dir() -> Path | None:
     return root if root.is_dir() else None
 
 
+def _submodule_uninitialized(directory: Path) -> bool:
+    """True when git registered the submodule path (so the directory exists)
+    but its contents were never checked out - i.e. nobody ran
+    `git submodule update --init`."""
+    return directory.is_dir() and not any(directory.iterdir())
+
+
+def _check_vendored_rules_initialized() -> None:
+    """Fail fast and clearly when a vendored rules submodule is present but
+    empty, instead of letting run_capa/scan_yara degrade to a generic
+    TOOL_NOT_AVAILABLE/INVALID_INPUT deep inside an investigation with
+    nothing pointing back at the actual cause. This only ever fires for the
+    "forgot to init" case: an explicit MIRA_*_RULES_DIR override skips it,
+    and a deliberately-absent ruleset isn't representable here - after
+    cloning this repo, the vendored path always exists (empty) until the
+    submodule is initialized.
+    """
+    if os.getenv("MIRA_CAPA_RULES_DIR") is None and _submodule_uninitialized(_repo_root() / "rules" / "capa"):
+        raise RuntimeError("rules/capa is empty - run: git submodule update --init")
+    if os.getenv("MIRA_YARA_RULES_DIR") is None and _submodule_uninitialized(_repo_root() / "rules" / "signature-base"):
+        raise RuntimeError("rules/signature-base is empty - run: git submodule update --init")
+
+
 def _analysis_limits() -> AnalysisLimits:
     """capa's vivisect backend is far slower than every other capability -
-    measured 24-36s against the vendored rule set on a trivial sample.
+    24-36s against the vendored rule set on a trivial synthetic PE, but 152s
+    against a real one (notepad.exe: ~350KB, actual compiled code) - vivisect's
+    cost scales with how much code there is to disassemble, and malware
+    samples can easily be larger or denser than that.
 
     Override MIRA_ANALYSIS_TIMEOUT_SECONDS directly; otherwise this bumps the
     default once run_capa actually has rules to run (vendored or configured),
@@ -88,12 +114,13 @@ def _analysis_limits() -> AnalysisLimits:
     if timeout:
         return AnalysisLimits(timeout_seconds=float(timeout))
     if _configured_capa_rules_dir() is not None:
-        return AnalysisLimits(timeout_seconds=90.0)
+        return AnalysisLimits(timeout_seconds=300.0)
     return AnalysisLimits()
 
 
 def build_client(sample_path: Path) -> tuple[StaticMCPClient, str]:
     """Register the sample and return a client bound to its store."""
+    _check_vendored_rules_initialized()
     store = ArtifactStore(sample_path.parent)
     store.register(ARTIFACT_ID, sample_path)
     server = StaticMCPServer(

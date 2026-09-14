@@ -2,8 +2,13 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from mira.agents.static.wiring import _configured_capa_rules_dir, _configured_yara_rulesets
+from mira.agents.static.wiring import (
+    _check_vendored_rules_initialized,
+    _configured_capa_rules_dir,
+    _configured_yara_rulesets,
+)
 
 
 class YaraRulesetDiscoveryTests(unittest.TestCase):
@@ -66,6 +71,53 @@ class CapaRulesDirDiscoveryTests(unittest.TestCase):
                     os.environ["MIRA_CAPA_RULES_DIR"] = previous
 
         self.assertEqual(rules_dir, Path(temporary_directory))
+
+
+class VendoredRulesInitializedCheckTests(unittest.TestCase):
+    def test_raises_a_clear_error_when_a_submodule_is_present_but_empty(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "rules" / "capa").mkdir(parents=True)
+            (root / "rules" / "signature-base").mkdir(parents=True)
+
+            for previous_env in ("MIRA_CAPA_RULES_DIR", "MIRA_YARA_RULES_DIR"):
+                os.environ.pop(previous_env, None)
+
+            with patch("mira.agents.static.wiring._repo_root", return_value=root):
+                with self.assertRaisesRegex(RuntimeError, "rules/capa.*git submodule update --init"):
+                    _check_vendored_rules_initialized()
+
+    def test_does_not_raise_once_the_capa_submodule_has_content(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "rules" / "capa").mkdir(parents=True)
+            (root / "rules" / "capa" / "LICENSE.txt").write_text("...")
+            (root / "rules" / "signature-base").mkdir(parents=True)
+            (root / "rules" / "signature-base" / "yara").mkdir()
+
+            for previous_env in ("MIRA_CAPA_RULES_DIR", "MIRA_YARA_RULES_DIR"):
+                os.environ.pop(previous_env, None)
+
+            with patch("mira.agents.static.wiring._repo_root", return_value=root):
+                _check_vendored_rules_initialized()
+
+    def test_explicit_env_override_skips_the_check_for_that_ruleset(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "rules" / "capa").mkdir(parents=True)
+            (root / "rules" / "signature-base").mkdir(parents=True)
+
+            previous = os.environ.get("MIRA_CAPA_RULES_DIR")
+            os.environ["MIRA_CAPA_RULES_DIR"] = str(root)
+            try:
+                with patch("mira.agents.static.wiring._repo_root", return_value=root):
+                    with self.assertRaisesRegex(RuntimeError, "rules/signature-base"):
+                        _check_vendored_rules_initialized()
+            finally:
+                if previous is None:
+                    os.environ.pop("MIRA_CAPA_RULES_DIR", None)
+                else:
+                    os.environ["MIRA_CAPA_RULES_DIR"] = previous
 
 
 if __name__ == "__main__":
