@@ -6,6 +6,9 @@ jobs:
       - image: cimg/python:3.11
     steps:
       - checkout
+      - run:
+          name: Fetch rule submodules (rules/capa, rules/signature-base)
+          command: git submodule sync && git submodule update --init --recursive
       - restore_cache:
           keys:
             - v1-pip-{{ checksum "pyproject.toml" }}
