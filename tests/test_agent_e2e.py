@@ -4,6 +4,10 @@ Uses a scripted model so the run is deterministic, but everything below the
 model is real — artifact store, MCP server, isolated worker, and the loop.
 """
 
+import os
+import subprocess
+import sys
+
 from mira.reasoning.contracts.model import ModelResponse
 from mira.reasoning.contracts.tool import ToolCall
 from mira.reasoning.main import investigate
@@ -76,14 +80,53 @@ async def test_a_trace_is_written_for_the_run(tmp_path):
     sample = tmp_path / "sample.bin"
     sample.write_bytes(SAMPLE_BYTES)
 
-    await investigate(
+    output = await investigate(
         sample,
         "Characterize the sample",
         trace_dir=tmp_path / "runs",
         model=build_model(),
     )
 
-    assert (tmp_path / "runs" / "trace_sample.json").is_file()
+    assert (tmp_path / "runs" / "trace_sample_characterize_the_sample.json").is_file()
+    # The whole point of one run id: metadata names the file on disk, so an
+    # evidence reference can be resolved back to its full observation.
+    assert output.metadata["run_id"] == "sample_characterize_the_sample"
+
+
+async def test_two_objectives_do_not_overwrite_each_others_trace(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(SAMPLE_BYTES)
+
+    first = await investigate(
+        sample, "Assess packing", trace_dir=tmp_path / "runs", model=build_model()
+    )
+    second = await investigate(
+        sample, "Assess capability", trace_dir=tmp_path / "runs", model=build_model()
+    )
+
+    assert first.metadata["run_id"] != second.metadata["run_id"]
+    for output in (first, second):
+        assert (tmp_path / "runs" / f"trace_{output.metadata['run_id']}.json").is_file()
+
+
+def test_the_run_id_is_stable_across_processes():
+    """hash() is seed-randomized per process, so a run id derived from it
+    named a different trace file on every run."""
+    source = (
+        "from mira.reasoning.composition import build_run_id;"
+        "print(build_run_id('sample', 'Assess packing'))"
+    )
+    seeds = [
+        subprocess.run(
+            [sys.executable, "-c", source],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        ).stdout.strip()
+        for seed in ("1", "2")
+    ]
+    assert seeds == ["sample_assess_packing", "sample_assess_packing"]
 
 
 async def test_the_model_cannot_retarget_another_artifact(tmp_path):

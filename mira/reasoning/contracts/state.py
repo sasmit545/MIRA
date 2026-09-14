@@ -11,6 +11,10 @@ from ..contracts.finding import Finding
 class State:
     """Mutable state owned by the run."""
     objective: Objective
+    # Names this run's trace file too, so an evidence reference recorded here
+    # resolves back to the full observation on disk. Supplied by the caller:
+    # deriving it here (from hash(), say) makes it unstable across processes.
+    run_id: str
     turn_count: int = 0
     tool_call_count: int = 0
     total_prompt_tokens: int = 0
@@ -20,10 +24,6 @@ class State:
     evidence: List[Any] = field(default_factory=list)  # Curated subset of observations
     observations: List[Dict[str, Any]] = field(default_factory=list)  # Each observation: {'call': ToolCall, 'result': ToolResult}
     scratch: Dict[str, Any] = field(default_factory=dict)  # visible to model, excluded from output
-    run_id: str = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.run_id = "run_" + str(hash(self.objective.description))
 
     def record_usage(self, usage: Optional[Dict[str, int]]) -> None:
         if usage is None:

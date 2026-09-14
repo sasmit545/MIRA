@@ -53,7 +53,9 @@ class AgentLoop:
         agent_def: AgentDefinition,
     ) -> FinalOutput:
         """Run the investigation until completion. Always writes a trace."""
-        state = State(objective=objective)
+        # The tracer names the trace file; taking the run id from it is what
+        # makes a recorded evidence reference resolvable back to that file.
+        state = State(objective=objective, run_id=self.tracer.run_id)
         try:
             return await self._run(state, agent_def)
         finally:

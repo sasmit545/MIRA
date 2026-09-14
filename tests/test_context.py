@@ -25,7 +25,7 @@ def build_definition(role=ROLE, scope=SCOPE):
 
 
 def build_state():
-    return State(objective=Objective(description="Test objective"))
+    return State(objective=Objective(description="Test objective"), run_id="test_run")
 
 
 def test_context_includes_objective_and_tools():

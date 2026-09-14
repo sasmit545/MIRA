@@ -13,7 +13,7 @@ def test_completion_checker_initialization():
 
 def test_is_active_max_turns():
     obj = Objective(description="Test objective")
-    state = State(objective=obj)
+    state = State(objective=obj, run_id="test_run")
     state.turn_count = 10
     agent_def = AgentDefinition(
         role="Test role.",
@@ -30,7 +30,7 @@ def test_is_active_max_turns():
 
 def test_is_active_max_tool_calls():
     obj = Objective(description="Test objective")
-    state = State(objective=obj)
+    state = State(objective=obj, run_id="test_run")
     state.tool_call_count = 10
     agent_def = AgentDefinition(
         role="Test role.",
@@ -47,7 +47,7 @@ def test_is_active_max_tool_calls():
 
 def test_is_active_consecutive_empty_responses():
     obj = Objective(description="Test objective")
-    state = State(objective=obj)
+    state = State(objective=obj, run_id="test_run")
     agent_def = AgentDefinition(
         role="Test role.",
         scope="Test scope.",

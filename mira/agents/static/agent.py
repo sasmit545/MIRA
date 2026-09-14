@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +22,7 @@ from mira.reasoning.composition import (
     DEFAULT_MAX_TOOL_CALLS,
     DEFAULT_MAX_TURNS,
     build_loop,
+    build_run_id,
     build_tracer,
 )
 from mira.reasoning.contracts.objective import Objective as LoopObjective
@@ -105,7 +105,8 @@ class StaticAgent:
         loop = build_loop(
             tool_runtime=ToolRuntime(permitted, execute),
             tracer=build_tracer(
-                run_id=_run_id(artifact_id, objective), trace_dir=self._trace_dir
+                run_id=build_run_id(artifact_id, objective.name),
+                trace_dir=self._trace_dir,
             ),
             model=self._model,
         )
@@ -147,9 +148,3 @@ class StaticAgent:
                 }
             ]
         return []
-
-
-def _run_id(artifact_id: str, objective: InvestigationObjective) -> str:
-    """Keep two objectives on one artifact from overwriting each other's trace."""
-    slug = re.sub(r"[^a-z0-9]+", "_", objective.name.lower()).strip("_")
-    return f"{artifact_id}_{slug}"

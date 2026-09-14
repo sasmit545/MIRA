@@ -23,6 +23,7 @@ from .composition import (
     DEFAULT_MAX_TOOL_CALLS,
     DEFAULT_MAX_TURNS,
     build_loop,
+    build_run_id,
     build_tracer,
     load_env,
 )
@@ -63,7 +64,9 @@ async def investigate(
 
     loop = build_loop(
         tool_runtime=ToolRuntime(manifest, build_executor(client, artifact_id)),
-        tracer=build_tracer(run_id=sample_path.stem, trace_dir=trace_dir),
+        tracer=build_tracer(
+            run_id=build_run_id(sample_path.stem, objective_text), trace_dir=trace_dir
+        ),
         model=model,
         on_turn=on_turn,
     )
@@ -117,7 +120,8 @@ def main() -> None:
     print(f"findings:  {len(output.findings)}")
     print(f"tokens:    {output.metadata['total_tokens']} ({output.metadata['prompt_tokens']} prompt + {output.metadata['completion_tokens']} completion)")
     print(f"metadata:  {output.metadata}")
-    print(f"trace:     {arguments.trace_dir / f'trace_{arguments.sample.stem}.json'}")
+    trace_file = arguments.trace_dir / f"trace_{output.metadata['run_id']}.json"
+    print(f"trace:     {trace_file}")
 
 
 if __name__ == "__main__":
