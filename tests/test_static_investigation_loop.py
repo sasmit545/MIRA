@@ -7,13 +7,16 @@ that evidence from one objective changes the next one.
 
 import json
 
+from support import ToolThenReportModel
+
 from mira.agents.base import Specialist
 from mira.reasoning.composition import build_run_id
 from mira.agents.static.agent import StaticAgent
 from mira.core.coordinator import StaticCoordinator
 from mira.core.state import InvestigationState
+from mira.reasoning.contracts.finding import Confidence
 from mira.reasoning.contracts.model import ModelResponse
-from mira.reasoning.contracts.tool import ToolCall
+
 
 RESPONSES = {
     "file_info": {"status": "ok", "data": {"entropy": 7.8}, "metadata": {}},
@@ -30,9 +33,6 @@ RESPONSES = {
     "extract_strings": {"status": "ok", "data": {"strings": []}, "metadata": {}},
 }
 
-REPORT = '{"summary": "done", "verdict": "suspicious", "findings": []}'
-
-
 class ScriptedClient:
     def __init__(self):
         self.calls = []
@@ -40,28 +40,6 @@ class ScriptedClient:
     async def invoke(self, capability, artifact_id, **payload):
         self.calls.append(capability)
         return RESPONSES[capability]
-
-
-class ToolThenReportModel:
-    """Calls each named tool once, then submits a report.
-
-    Stands in for a real model choosing capabilities. It also records the
-    tools it was offered each turn, which is how we check the objective
-    actually bounds the choice.
-    """
-
-    def __init__(self, *tool_names):
-        self.pending = list(tool_names)
-        self.offered = []
-
-    def generate(self, context, tools):
-        self.offered.append([spec.name for spec in tools])
-        if self.pending:
-            name = self.pending.pop(0)
-            return ModelResponse(
-                tool_calls=[ToolCall(tool_call_id=name, name=name, arguments={})]
-            )
-        return ModelResponse(report=REPORT)
 
 
 def build_agent(client, tmp_path, *tool_names):
@@ -165,5 +143,5 @@ async def test_a_run_with_no_report_still_returns_a_well_formed_message(tmp_path
     assert finding.assessment.startswith("inconclusive:")
     assert finding.findings == []
     assert finding.evidence_refs == []
-    assert finding.confidence == "low"
+    assert finding.confidence is Confidence.LOW
     assert finding.recommended_actions == []

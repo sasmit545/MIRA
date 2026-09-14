@@ -8,11 +8,11 @@ else has to persist them.
 
 import json
 
+from support import ToolThenReportModel
+
 from mira.agents.static.agent import StaticAgent
 from mira.core.objective import InvestigationObjective
 from mira.core.state import InvestigationState
-from mira.reasoning.contracts.model import ModelResponse
-from mira.reasoning.contracts.tool import ToolCall
 from mira.reasoning.runtime.trace import resolve_observation, trace_path, trace_provenance
 
 PACKED = {
@@ -25,8 +25,6 @@ ENTROPY = {
     "data": {"entropy": 7.8, "offset": 0, "length": 4096},
     "metadata": {"capability": "calculate_entropy"},
 }
-REPORT = '{"summary": "done", "verdict": "suspicious", "findings": []}'
-
 OBJECTIVE = InvestigationObjective(
     name="Assess packing",
     description="Assess whether the sample is packed.",
@@ -38,17 +36,6 @@ OBJECTIVE = InvestigationObjective(
 class ScriptedClient:
     async def invoke(self, capability, artifact_id, **payload):
         return {"detect_packer": PACKED, "calculate_entropy": ENTROPY}[capability]
-
-
-class ToolThenReportModel:
-    def __init__(self, *tool_names):
-        self.pending = list(tool_names)
-
-    def generate(self, context, tools):
-        if self.pending:
-            name = self.pending.pop(0)
-            return ModelResponse(tool_calls=[ToolCall(tool_call_id=name, name=name, arguments={})])
-        return ModelResponse(report=REPORT)
 
 
 async def run(tmp_path, *capabilities):

@@ -8,6 +8,7 @@ import pytest
 
 from mira.agents.static.evidence import (
     HIGH_REGION_ENTROPY,
+    MAX_RULE_SIGNALS,
     PACKED_SECTION_ENTROPY,
     PAGED_CAPABILITIES,
     normalize,
@@ -216,6 +217,31 @@ def test_each_yara_rule_match_is_its_own_evidence():
         rule for rule in ("Rule_A", "Rule_B", "Rule_C")
         if any(rule in signal.observation for signal in signals)
     }
+
+
+def test_a_noisy_ruleset_does_not_mint_unbounded_evidence():
+    """A page holds up to a thousand rule hits. One evidence record each would
+    put a thousand identifiers into a message that has to stay bounded."""
+    result = ok({"matches": [
+        {"rule": f"Rule_{n}", "namespace": "n", "tags": []} for n in range(500)
+    ]})
+
+    signals = normalize("scan_yara", result, PRIOR)
+
+    assert len(signals) == MAX_RULE_SIGNALS + 1
+    assert "Rule_0" in signals[0].observation
+    # The count of what was not named individually is never lost.
+    assert str(500 - MAX_RULE_SIGNALS) in signals[-1].observation
+
+
+def test_a_ruleset_under_the_cap_names_every_rule():
+    result = ok({"findings": [
+        {"rule_id": f"cap {n}", "namespace": "host", "meta": {}} for n in range(3)
+    ]})
+
+    signals = normalize("run_capa", result, PRIOR)
+
+    assert len(signals) == 3
 
 
 def test_an_unknown_capability_produces_no_evidence():

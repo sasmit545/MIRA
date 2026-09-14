@@ -24,6 +24,11 @@ BASE_CONFIDENCE = 0.5  # a signal that only just crosses its threshold
 LOW_FUNCTION_DENSITY = 0.01  # functions per KiB; below this, discovery looks starved
 MIN_SIZE_FOR_DENSITY = 64 * 1024  # density says nothing about a small file
 MAX_EXAMPLES = 5  # keep an observation a sentence, not a dump of a page
+# A rule engine reports one hit per rule, and a page holds up to a thousand of
+# them. Minting an evidence record for each would put a thousand identifiers in
+# a message that has to stay bounded, so past this many the rest are counted
+# rather than named. The full list is always in the trace.
+MAX_RULE_SIGNALS = 20
 
 CONFIDENCE_RULE_MATCH = 0.9  # a curated rule fired on this sample
 CONFIDENCE_STRONG = 0.8
@@ -219,8 +224,9 @@ def _calculate_entropy(data: dict, prior: dict[str, dict]) -> list[Signal]:
 
 
 def _scan_yara(data: dict, prior: dict[str, dict]) -> list[Signal]:
+    matches = data.get("matches") or []
     signals = []
-    for match in data.get("matches") or []:
+    for match in matches[:MAX_RULE_SIGNALS]:
         tags = ", ".join(match.get("tags") or [])
         suffix = f" tagged {tags}" if tags else ""
         signals.append(Signal(
@@ -229,19 +235,20 @@ def _scan_yara(data: dict, prior: dict[str, dict]) -> list[Signal]:
             f"({PAGE_CAVEAT}).",
             CONFIDENCE_RULE_MATCH,
         ))
-    return signals
+    return signals + _remainder(len(matches), "YARA rules matched")
 
 
 def _run_capa(data: dict, prior: dict[str, dict]) -> list[Signal]:
+    findings = data.get("findings") or []
     signals = []
-    for finding in data.get("findings") or []:
+    for finding in findings[:MAX_RULE_SIGNALS]:
         namespace = finding.get("namespace") or "(uncategorized)"
         signals.append(Signal(
             f"capa identified the capability {finding.get('rule_id')!r} "
             f"({namespace}) in this artifact ({PAGE_CAVEAT}).",
             CONFIDENCE_RULE_MATCH,
         ))
-    return signals
+    return signals + _remainder(len(findings), "capa capabilities were identified")
 
 
 def _list_functions(data: dict, prior: dict[str, dict]) -> list[Signal]:
@@ -290,8 +297,8 @@ def _file_info(data: dict, prior: dict[str, dict]) -> list[Signal]:
         # no original filename - thread one through ArtifactStore.register to
         # get it. An unidentifiable type is the derivable cousin.
         signals.append(Signal(
-            f"The file's type could not be identified from its header, so the "
-            f"format-specific capabilities cannot be applied to it.",
+            "The file's type could not be identified from its header, so the "
+            "format-specific capabilities cannot be applied to it.",
             CONFIDENCE_WEAK,
         ))
     return signals
@@ -332,6 +339,17 @@ def _is_known(name: str, vocabulary: frozenset[str]) -> bool:
     return lowered in vocabulary or (
         lowered.endswith(("a", "w")) and lowered[:-1] in vocabulary
     )
+
+
+def _remainder(total: int, what: str) -> list[Signal]:
+    """Account for rule hits past the cap, so the count is never lost."""
+    if total <= MAX_RULE_SIGNALS:
+        return []
+    return [Signal(
+        f"A further {total - MAX_RULE_SIGNALS} {what} {PAGE_CAVEAT}, beyond the "
+        f"{MAX_RULE_SIGNALS} named individually; the full list is in the run trace.",
+        CONFIDENCE_RULE_MATCH,
+    )]
 
 
 def _examples(values: list[str]) -> str:

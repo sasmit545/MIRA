@@ -14,8 +14,7 @@ from mira.core.state import InvestigationState
 from mira.core.objective import InvestigationObjective
 from mira.core.task import InvestigationTask
 from mira.agents.static.agent import StaticAgent
-from mira.reasoning.contracts.model import ModelResponse
-from mira.reasoning.contracts.tool import ToolCall
+from support import ToolThenReportModel
 
 
 def build_state() -> InvestigationState:
@@ -160,23 +159,11 @@ PACKED = {
     "data": {"packed": True, "packer": "UPX", "confidence": 0.9, "indicators": ["UPX0"]},
     "metadata": {},
 }
-REPORT = '{"summary": "done", "verdict": "suspicious", "findings": []}'
 
 
 class ScriptedClient:
     async def invoke(self, capability, artifact_id, **payload):
         return PACKED
-
-
-class ToolThenReportModel:
-    def __init__(self):
-        self.pending = ["detect_packer"]
-
-    def generate(self, context, tools):
-        if self.pending:
-            name = self.pending.pop(0)
-            return ModelResponse(tool_calls=[ToolCall(tool_call_id=name, name=name, arguments={})])
-        return ModelResponse(report=REPORT)
 
 
 def objective(name: str) -> InvestigationObjective:
@@ -186,7 +173,7 @@ def objective(name: str) -> InvestigationObjective:
 
 
 async def investigate(tmp_path, name, state=None):
-    agent = StaticAgent(ScriptedClient(), model=ToolThenReportModel(), trace_dir=tmp_path)
+    agent = StaticAgent(ScriptedClient(), model=ToolThenReportModel("detect_packer"), trace_dir=tmp_path)
     return await agent.investigate(objective(name), "sample-1", state=state)
 
 

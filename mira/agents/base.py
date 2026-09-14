@@ -12,7 +12,7 @@ from typing import Optional, Protocol, runtime_checkable
 
 from mira.core.objective import InvestigationObjective
 from mira.core.state import InvestigationState
-from mira.reasoning.contracts.finding import Finding
+from mira.reasoning.contracts.finding import Confidence, Finding
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,9 @@ class InvestigationFinding:
     assessment: str
     findings: list[Finding]
     evidence_refs: list[str]
-    confidence: str
+    # The enum, like each Finding's own confidence. Stringifying it here would
+    # be the one place the contract quietly downgrades a typed value.
+    confidence: Confidence
     recommended_actions: list[str]
 
 

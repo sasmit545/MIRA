@@ -1,7 +1,7 @@
 """Output contracts."""
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List
 from .finding import Finding
 from .tool import ToolResult
 

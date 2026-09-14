@@ -2,6 +2,9 @@
 
 import struct
 
+from mira.reasoning.contracts.model import ModelResponse
+from mira.reasoning.contracts.tool import ToolCall
+
 
 def build_minimal_pe() -> bytes:
     """A real enough PE32 that pefile parses it and PE capabilities run."""
@@ -18,3 +21,28 @@ def build_minimal_pe() -> bytes:
     )
     head = dos + b"PE\x00\x00" + coff + optional + section
     return head + b"\x00" * (0x400 - len(head)) + b"\x90" * 0x200
+
+
+REPORT = '{"summary": "done", "verdict": "suspicious", "findings": []}'
+
+
+class ToolThenReportModel:
+    """Calls each named tool once, then submits a report.
+
+    Stands in for a real model choosing capabilities. It also records the
+    tools it was offered each turn, which is how a test checks that the
+    objective actually bounds the choice.
+    """
+
+    def __init__(self, *tool_names):
+        self.pending = list(tool_names)
+        self.offered = []
+
+    def generate(self, context, tools):
+        self.offered.append([spec.name for spec in tools])
+        if self.pending:
+            name = self.pending.pop(0)
+            return ModelResponse(
+                tool_calls=[ToolCall(tool_call_id=name, name=name, arguments={})]
+            )
+        return ModelResponse(report=REPORT)

@@ -42,14 +42,14 @@ _SEVERITY_RANK = {member: rank for rank, member in enumerate(Severity)}
 _CONFIDENCE_RANK = {member: rank for rank, member in enumerate(Confidence)}
 
 
-def _overall_confidence(findings: list[Finding]) -> str:
+def _overall_confidence(findings: list[Finding]) -> Confidence:
     """The specialist is as confident as it is in its most serious claim.
 
     Not the highest confidence anywhere: a certain INFO finding says nothing
     about how sure the specialist is of the thing that actually matters.
     """
     if not findings:
-        return Confidence.LOW.value
+        return Confidence.LOW
     gravest = max(
         findings,
         key=lambda finding: (
@@ -57,7 +57,7 @@ def _overall_confidence(findings: list[Finding]) -> str:
             _CONFIDENCE_RANK[finding.confidence],
         ),
     )
-    return gravest.confidence.value
+    return gravest.confidence
 
 
 class StaticAgent:
@@ -181,7 +181,8 @@ class StaticAgent:
             # needs the judgement in the sentence they are given.
             assessment=f"{output.verdict}: {output.summary}",
             findings=output.findings,
-            evidence_refs=[item.id for item in evidence],
+            # The loop already reduced the shared accumulator to identifiers.
+            evidence_refs=output.evidence,
             confidence=_overall_confidence(output.findings),
             recommended_actions=output.recommended_actions,
         )
