@@ -13,6 +13,7 @@ from support import ToolThenReportModel
 from mira.agents.static.agent import StaticAgent
 from mira.core.objective import InvestigationObjective
 from mira.core.state import InvestigationState
+from mira.reasoning.composition import build_run_id
 from mira.reasoning.runtime.trace import resolve_observation, trace_path, trace_provenance
 
 PACKED = {
@@ -86,20 +87,35 @@ async def test_each_capability_resolves_to_its_own_observation(tmp_path):
 
 def test_an_unknown_run_resolves_to_an_explicit_absence(tmp_path):
     """Asking about an old run is a negative answer, not an exception."""
-    assert resolve_observation(tmp_path, trace_provenance("never_ran", 0)) is None
+    assert resolve_observation(
+        tmp_path, trace_provenance("never_ran", "detect_packer", 0)
+    ) is None
 
 
 async def test_a_position_past_the_end_of_the_trace_resolves_to_an_absence(tmp_path):
-    evidence = await run(tmp_path, "detect_packer")
-    run_id, _, _ = evidence[0].provenance.rpartition("#")
+    await run(tmp_path, "detect_packer")
+    run_id = build_run_id("sample-1", OBJECTIVE.name)
 
-    assert resolve_observation(tmp_path, trace_provenance(run_id, 99)) is None
+    assert resolve_observation(
+        tmp_path, trace_provenance(run_id, "detect_packer", 99)
+    ) is None
+
+
+async def test_a_capability_never_called_resolves_to_an_absence(tmp_path):
+    """Provenance names the capability, so asking for one this run never
+    invoked is an absence rather than someone else's observation."""
+    await run(tmp_path, "detect_packer")
+    run_id = build_run_id("sample-1", OBJECTIVE.name)
+
+    assert resolve_observation(
+        tmp_path, trace_provenance(run_id, "calculate_entropy", 0)
+    ) is None
 
 
 async def test_a_malformed_trace_file_resolves_to_an_absence(tmp_path):
     evidence = await run(tmp_path, "detect_packer")
     provenance = evidence[0].provenance
-    run_id, _, _ = provenance.rpartition("#")
+    run_id = build_run_id("sample-1", OBJECTIVE.name)
 
     with open(trace_path(tmp_path, run_id), "w") as truncated:
         truncated.write('[{"tool_results": [{"tool_c')
@@ -108,15 +124,54 @@ async def test_a_malformed_trace_file_resolves_to_an_absence(tmp_path):
 
 
 def test_an_unparseable_provenance_resolves_to_an_absence(tmp_path):
-    for provenance in ("", "no-separator", "run#", "run#not-a-number", "#0"):
+    for provenance in (
+        "",
+        "no-separator",
+        "run#0",  # the old two-part form
+        "run#capability#",
+        "run#capability#not-a-number",
+        "#capability#0",
+        "run##0",
+    ):
         assert resolve_observation(tmp_path, provenance) is None
 
 
 async def test_a_trace_holding_no_results_resolves_to_an_absence(tmp_path):
-    evidence = await run(tmp_path, "detect_packer")
-    run_id, _, _ = evidence[0].provenance.rpartition("#")
+    await run(tmp_path, "detect_packer")
+    run_id = build_run_id("sample-1", OBJECTIVE.name)
 
     with open(trace_path(tmp_path, run_id), "w") as empty:
         json.dump([], empty)
 
-    assert resolve_observation(tmp_path, trace_provenance(run_id, 0)) is None
+    assert resolve_observation(
+        tmp_path, trace_provenance(run_id, "detect_packer", 0)
+    ) is None
+
+
+REFUSED_OBJECTIVE = InvestigationObjective(
+    name="Assess packing",
+    description="Assess whether the sample is packed.",
+    reason="test",
+    capabilities=("detect_packer",),  # scan_yara is deliberately not permitted
+)
+
+
+async def test_a_refused_call_does_not_shift_later_provenance(tmp_path):
+    """A capability outside the objective is refused before the executor runs,
+    but the trace still records the attempt. Evidence minted afterwards must
+    still resolve to the observation that actually produced it."""
+    agent = StaticAgent(
+        ScriptedClient(),
+        model=ToolThenReportModel("scan_yara", "detect_packer"),
+        trace_dir=tmp_path,
+    )
+    state = InvestigationState()
+
+    await agent.investigate(REFUSED_OBJECTIVE, "sample-1", state=state)
+
+    assert state.evidence, "the permitted capability produced no evidence"
+    for item in state.evidence:
+        observation = resolve_observation(tmp_path, item.provenance)
+        assert observation is not None
+        assert observation["call"]["name"] == item.capability
+        assert observation["result"]["output"] == PACKED

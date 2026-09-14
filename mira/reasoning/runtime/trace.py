@@ -11,14 +11,21 @@ from ..contracts.model import ModelResponse
 PROVENANCE_SEPARATOR = "#"
 
 
-def trace_provenance(run_id: str, observation_index: int) -> str:
-    """Name one observation: which run wrote it, and where in that run it sits.
+def trace_provenance(run_id: str, capability: str, occurrence: int) -> str:
+    """Name one observation: which run wrote it, and which call within that run.
 
     This is the whole retrieval story (KTD2). The trace file already holds every
     full tool result, so a reference of this shape resolves back to the raw
     observation without a second persistence layer.
+
+    Keyed by capability rather than by position in the whole run: a call the
+    runtime refuses before the executor - a capability outside the objective -
+    is still recorded in the trace, so a single run-wide counter kept by the
+    executor drifts from the trace the moment one is refused. A capability is
+    either permitted for the whole run or never executed, so counting each
+    capability's own calls cannot drift.
     """
-    return f"{run_id}{PROVENANCE_SEPARATOR}{observation_index}"
+    return f"{run_id}{PROVENANCE_SEPARATOR}{capability}{PROVENANCE_SEPARATOR}{occurrence}"
 
 
 def trace_path(trace_dir: str | os.PathLike[str], run_id: str) -> str:
@@ -35,8 +42,11 @@ def resolve_observation(
     a position past the end, an unreadable or truncated trace. A caller asking
     about an old run deserves a negative answer, not an exception.
     """
-    run_id, separator, position = provenance.rpartition(PROVENANCE_SEPARATOR)
-    if not separator or not run_id or not position.isdigit():
+    parts = provenance.rsplit(PROVENANCE_SEPARATOR, 2)
+    if len(parts) != 3:
+        return None
+    run_id, capability, position = parts
+    if not run_id or not capability or not position.isdigit():
         return None
 
     try:
@@ -47,14 +57,16 @@ def resolve_observation(
     if not isinstance(turns, list):
         return None
 
-    # Observations are numbered across the whole run, in call order. Turns that
-    # recorded no tool call - an empty response, a rejected report - contribute
-    # nothing, which is what keeps this aligned with the specialist's counter.
+    # This capability's own calls, in order. Turns that recorded no tool call -
+    # an empty response, a rejected report - contribute nothing, and a call the
+    # runtime refused before the executor belongs to a different capability, so
+    # it cannot shift this one's numbering.
     observations = [
         {"call": call, "result": result}
         for turn in turns
         if isinstance(turn, dict)
         for call, result in zip(turn.get("tool_calls") or [], turn.get("tool_results") or [])
+        if isinstance(call, dict) and call.get("name") == capability
     ]
     index = int(position)
     return observations[index] if index < len(observations) else None

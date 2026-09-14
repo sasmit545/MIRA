@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from itertools import count
+from collections import Counter
 from pathlib import Path
 
 from mira.agents.base import InvestigationFinding
@@ -121,9 +121,11 @@ class StaticAgent:
         run_id = build_run_id(artifact_id, objective.name)
         invoke = build_executor(self._client, artifact_id)
         # The specialist is the one place that sees every result in order, so
-        # it is where evidence identifiers are minted (KTD1) and where an
-        # observation's position in the trace is known.
-        position = count()
+        # it is where evidence identifiers are minted (KTD1). Positions are
+        # counted per capability: the runtime refuses a capability outside the
+        # objective before it reaches this executor, yet the refusal still
+        # reaches the trace, so a single run-wide counter drifts from it.
+        occurrences: Counter[str] = Counter()
         # Numbering continues past whatever the shared state already holds:
         # two runs both minting "E1" would leave their findings citing an
         # identifier the orchestrator cannot resolve to one observation.
@@ -131,7 +133,8 @@ class StaticAgent:
 
         async def execute(capability: str, arguments: dict):
             result = await invoke(capability, arguments)
-            provenance = trace_provenance(run_id, next(position))
+            provenance = trace_provenance(run_id, capability, occurrences[capability])
+            occurrences[capability] += 1
             # `results` is deliberately read before this result joins it: a
             # normalizer's `prior` is what earlier capabilities reported.
             for signal in normalize(capability, result, results):
