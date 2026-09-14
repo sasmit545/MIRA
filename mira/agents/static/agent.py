@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from itertools import count
 from pathlib import Path
-from typing import Any
 
 from mira.agents.base import InvestigationFinding
+from mira.agents.static.evidence import normalize
 from mira.agents.static.wiring import (
     STATIC_ROLE,
     STATIC_SCOPE,
@@ -16,6 +17,7 @@ from mira.contracts.capabilities.static.analyze_pe import AnalyzePEInput, Analyz
 from mira.contracts.capabilities.static.list_imports import ListImportsInput, ListImportsOutput
 from mira.contracts.requests import CapabilityRequest
 from mira.contracts.results import CapabilityResult
+from mira.core.evidence import Evidence
 from mira.core.objective import InvestigationObjective
 from mira.mcp.client import StaticMCPClient
 from mira.reasoning.composition import (
@@ -29,6 +31,9 @@ from mira.reasoning.contracts.objective import Objective as LoopObjective
 from mira.reasoning.contracts.output import FinalOutput
 from mira.reasoning.definition.agent import AgentDefinition
 from mira.reasoning.runtime.tool_runtime import ToolRuntime
+from mira.reasoning.runtime.trace import trace_provenance
+
+SOURCE_AGENT = "static"
 
 
 class StaticAgent:
@@ -81,13 +86,32 @@ class StaticAgent:
         the Coordinator did not authorize is refused rather than executed.
         """
         results: dict[str, dict] = {}
-        evidence: list[dict] = []
+        evidence: list[Evidence] = []
+        run_id = build_run_id(artifact_id, objective.name)
         invoke = build_executor(self._client, artifact_id)
+        # The specialist is the one place that sees every result in order, so
+        # it is where evidence identifiers are minted (KTD1) and where an
+        # observation's position in the trace is known.
+        position = count()
 
         async def execute(capability: str, arguments: dict):
             result = await invoke(capability, arguments)
+            provenance = trace_provenance(run_id, next(position))
+            # `results` is deliberately read before this result joins it: a
+            # normalizer's `prior` is what earlier capabilities reported.
+            for signal in normalize(capability, result, results):
+                evidence.append(
+                    Evidence(
+                        id=f"E{len(evidence) + 1}",
+                        observation=signal.observation,
+                        source_agent=SOURCE_AGENT,
+                        capability=capability,
+                        artifact_id=artifact_id,
+                        confidence=signal.confidence,
+                        provenance=provenance,
+                    )
+                )
             results[capability] = result
-            evidence.extend(self._evidence_from_result(capability, artifact_id, result))
             return result
 
         manifest = tool_manifest()
@@ -104,10 +128,7 @@ class StaticAgent:
         )
         loop = build_loop(
             tool_runtime=ToolRuntime(permitted, execute),
-            tracer=build_tracer(
-                run_id=build_run_id(artifact_id, objective.name),
-                trace_dir=self._trace_dir,
-            ),
+            tracer=build_tracer(run_id=run_id, trace_dir=self._trace_dir),
             model=self._model,
         )
 
@@ -118,33 +139,3 @@ class StaticAgent:
             objective=objective, results=results, evidence=evidence, output=output
         )
 
-    @staticmethod
-    def _evidence_from_result(capability: str, artifact_id: str, result: dict) -> list[dict]:
-        """Turn capability output into the evidence shape used by the coordinator."""
-        if result.get("status") != "ok":
-            return []
-
-        data: dict[str, Any] = result.get("data") or {}
-        if capability == "analyze_pe":
-            return [
-                {
-                    "kind": "high_entropy_executable_section",
-                    "artifact_id": artifact_id,
-                    "capability": capability,
-                    "section": section.get("name"),
-                    "entropy": section["entropy"],
-                }
-                for section in data.get("sections", [])
-                if section.get("entropy", 0) >= 7.2
-            ]
-        if capability == "detect_packer" and (data.get("packed") or data.get("indicators")):
-            return [
-                {
-                    "kind": "packing_indicator",
-                    "artifact_id": artifact_id,
-                    "capability": capability,
-                    "packed": bool(data.get("packed")),
-                    "indicators": data.get("indicators", []),
-                }
-            ]
-        return []

@@ -8,6 +8,24 @@ from ..contracts.tool import ToolCall, ToolResult
 from ..contracts.model import ModelResponse
 
 
+PROVENANCE_SEPARATOR = "#"
+
+
+def trace_provenance(run_id: str, observation_index: int) -> str:
+    """Name one observation: which run wrote it, and where in that run it sits.
+
+    This is the whole retrieval story (KTD2). The trace file already holds every
+    full tool result, so a reference of this shape resolves back to the raw
+    observation without a second persistence layer.
+    """
+    return f"{run_id}{PROVENANCE_SEPARATOR}{observation_index}"
+
+
+def trace_path(trace_dir: str | os.PathLike[str], run_id: str) -> str:
+    """Where `Tracer.save()` puts this run's trace."""
+    return os.path.join(str(trace_dir), f"trace_{run_id}.json")
+
+
 class Tracer:
     """Records each turn and writes a trace file."""
 
@@ -41,7 +59,7 @@ class Tracer:
 
     def save(self) -> str:
         """Save the trace to a JSON file and return the file path."""
-        trace_file = os.path.join(self.output_dir, f"trace_{self.run_id}.json")
+        trace_file = trace_path(self.output_dir, self.run_id)
         with open(trace_file, "w") as f:
             json.dump(self.trace, f, indent=2, default=_serializable)
         return trace_file

@@ -90,7 +90,10 @@ async def test_evidence_changes_the_second_static_objective(tmp_path):
 
     assert first_objective.name == "Characterize sample"
     assert second_objective.name == "Assess packing indicators"
-    assert any(item["kind"] == "packing_indicator" for item in second_finding.evidence)
+    packing = [item for item in second_finding.evidence if item.capability == "detect_packer"]
+    assert packing, "the packing objective produced no evidence"
+    assert "packer" in packing[0].observation.lower()
+    assert packing[0].id == "E1"  # identifiers are minted per investigation
 
 
 async def test_the_model_chooses_a_subset_of_the_objective(tmp_path):
