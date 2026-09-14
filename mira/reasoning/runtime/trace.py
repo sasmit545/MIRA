@@ -26,6 +26,40 @@ def trace_path(trace_dir: str | os.PathLike[str], run_id: str) -> str:
     return os.path.join(str(trace_dir), f"trace_{run_id}.json")
 
 
+def resolve_observation(
+    trace_dir: str | os.PathLike[str], provenance: str
+) -> Optional[Dict[str, Any]]:
+    """Return the full observation a piece of evidence was derived from.
+
+    Returns None rather than raising for every kind of miss - an unknown run,
+    a position past the end, an unreadable or truncated trace. A caller asking
+    about an old run deserves a negative answer, not an exception.
+    """
+    run_id, separator, position = provenance.rpartition(PROVENANCE_SEPARATOR)
+    if not separator or not run_id or not position.isdigit():
+        return None
+
+    try:
+        with open(trace_path(trace_dir, run_id)) as trace_file:
+            turns = json.load(trace_file)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(turns, list):
+        return None
+
+    # Observations are numbered across the whole run, in call order. Turns that
+    # recorded no tool call - an empty response, a rejected report - contribute
+    # nothing, which is what keeps this aligned with the specialist's counter.
+    observations = [
+        {"call": call, "result": result}
+        for turn in turns
+        if isinstance(turn, dict)
+        for call, result in zip(turn.get("tool_calls") or [], turn.get("tool_results") or [])
+    ]
+    index = int(position)
+    return observations[index] if index < len(observations) else None
+
+
 class Tracer:
     """Records each turn and writes a trace file."""
 
