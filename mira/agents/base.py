@@ -7,24 +7,33 @@ Coordinator can assign work without knowing which specialist will run it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+
+from typing import Optional, Protocol, runtime_checkable
 
 from mira.core.objective import InvestigationObjective
-from mira.reasoning.contracts.output import FinalOutput
+from mira.core.state import InvestigationState
+from mira.reasoning.contracts.finding import Finding
 
 
 @dataclass(frozen=True)
 class InvestigationFinding:
-    """Results and normalized evidence produced while pursuing one objective.
+    """The FINDING message a specialist returns (design document, section 10).
 
-    `evidence` is normalized for the Coordinator to reason over; `output` is
-    the specialist's own verdict from its reasoning loop.
+    This lands directly in an orchestrating model's context window, so it
+    carries an assessment and references rather than raw capability output.
+    The full observation behind any reference is pulled on demand, by
+    identifier, from the shared state and the run's trace.
+
+    The objective is not repeated back: the orchestrator assigned it and
+    already holds it.
     """
 
-    objective: InvestigationObjective
-    results: dict[str, dict]
-    evidence: list[dict]
-    output: FinalOutput
+    artifact_id: str
+    assessment: str
+    findings: list[Finding]
+    evidence_refs: list[str]
+    confidence: str
+    recommended_actions: list[str]
 
 
 @runtime_checkable
@@ -37,5 +46,8 @@ class Specialist(Protocol):
     """
 
     async def investigate(
-        self, objective: InvestigationObjective, artifact_id: str
+        self,
+        objective: InvestigationObjective,
+        artifact_id: str,
+        state: Optional[InvestigationState] = None,
     ) -> InvestigationFinding: ...

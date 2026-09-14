@@ -10,6 +10,7 @@ import json
 
 from mira.agents.static.agent import StaticAgent
 from mira.core.objective import InvestigationObjective
+from mira.core.state import InvestigationState
 from mira.reasoning.contracts.model import ModelResponse
 from mira.reasoning.contracts.tool import ToolCall
 from mira.reasoning.runtime.trace import resolve_observation, trace_path, trace_provenance
@@ -51,42 +52,46 @@ class ToolThenReportModel:
 
 
 async def run(tmp_path, *capabilities):
+    """Return the evidence a run produced. The returned message carries only
+    identifiers, so the records themselves come from the shared state."""
     agent = StaticAgent(
         ScriptedClient(), model=ToolThenReportModel(*capabilities), trace_dir=tmp_path
     )
-    return await agent.investigate(OBJECTIVE, "sample-1")
+    state = InvestigationState()
+    await agent.investigate(OBJECTIVE, "sample-1", state=state)
+    return state.evidence
 
 
 async def test_evidence_resolves_to_the_observation_that_produced_it(tmp_path):
-    finding = await run(tmp_path, "detect_packer")
+    evidence = await run(tmp_path, "detect_packer")
 
-    evidence = finding.evidence[0]
-    observation = resolve_observation(tmp_path, evidence.provenance)
+    item = evidence[0]
+    observation = resolve_observation(tmp_path, item.provenance)
 
     assert observation is not None
-    assert observation["call"]["name"] == evidence.capability
+    assert observation["call"]["name"] == item.capability
     # The raw output the orchestrator never receives, available on demand.
     assert observation["result"]["output"] == PACKED
 
 
 async def test_every_evidence_reference_in_a_run_resolves(tmp_path):
     """Resolution happens after the loop returned and State went out of scope."""
-    finding = await run(tmp_path, "detect_packer", "calculate_entropy")
+    evidence = await run(tmp_path, "detect_packer", "calculate_entropy")
 
-    assert len(finding.evidence) == 2
-    for evidence in finding.evidence:
-        observation = resolve_observation(tmp_path, evidence.provenance)
+    assert len(evidence) == 2
+    for item in evidence:
+        observation = resolve_observation(tmp_path, item.provenance)
         assert observation is not None
-        assert observation["call"]["name"] == evidence.capability
+        assert observation["call"]["name"] == item.capability
 
 
 async def test_each_capability_resolves_to_its_own_observation(tmp_path):
     """Two results in one run must not both resolve to the first one."""
-    finding = await run(tmp_path, "detect_packer", "calculate_entropy")
+    evidence = await run(tmp_path, "detect_packer", "calculate_entropy")
 
     resolved = {
-        evidence.capability: resolve_observation(tmp_path, evidence.provenance)["result"]["output"]
-        for evidence in finding.evidence
+        item.capability: resolve_observation(tmp_path, item.provenance)["result"]["output"]
+        for item in evidence
     }
 
     assert resolved == {"detect_packer": PACKED, "calculate_entropy": ENTROPY}
@@ -98,15 +103,15 @@ def test_an_unknown_run_resolves_to_an_explicit_absence(tmp_path):
 
 
 async def test_a_position_past_the_end_of_the_trace_resolves_to_an_absence(tmp_path):
-    finding = await run(tmp_path, "detect_packer")
-    run_id, _, _ = finding.evidence[0].provenance.rpartition("#")
+    evidence = await run(tmp_path, "detect_packer")
+    run_id, _, _ = evidence[0].provenance.rpartition("#")
 
     assert resolve_observation(tmp_path, trace_provenance(run_id, 99)) is None
 
 
 async def test_a_malformed_trace_file_resolves_to_an_absence(tmp_path):
-    finding = await run(tmp_path, "detect_packer")
-    provenance = finding.evidence[0].provenance
+    evidence = await run(tmp_path, "detect_packer")
+    provenance = evidence[0].provenance
     run_id, _, _ = provenance.rpartition("#")
 
     with open(trace_path(tmp_path, run_id), "w") as truncated:
@@ -121,8 +126,8 @@ def test_an_unparseable_provenance_resolves_to_an_absence(tmp_path):
 
 
 async def test_a_trace_holding_no_results_resolves_to_an_absence(tmp_path):
-    finding = await run(tmp_path, "detect_packer")
-    run_id, _, _ = finding.evidence[0].provenance.rpartition("#")
+    evidence = await run(tmp_path, "detect_packer")
+    run_id, _, _ = evidence[0].provenance.rpartition("#")
 
     with open(trace_path(tmp_path, run_id), "w") as empty:
         json.dump([], empty)

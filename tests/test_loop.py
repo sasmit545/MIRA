@@ -118,7 +118,7 @@ async def test_malformed_report_is_observed_then_recovered(tmp_path):
     result = await loop.run(Objective(description="Test objective"), build_definition())
 
     assert result.completion_reason == "reported"
-    assert any(not evidence.success for evidence in result.evidence)
+    assert any(not evidence.success for evidence in result.observations)
 
 
 async def test_tool_failure_is_observed_not_raised(tmp_path):
@@ -138,7 +138,7 @@ async def test_tool_failure_is_observed_not_raised(tmp_path):
     )
 
     assert result.completion_reason == "reported"
-    assert "capability exploded" in result.evidence[0].error
+    assert "capability exploded" in result.observations[0].error
 
 
 async def test_unknown_tool_is_observed(tmp_path):
@@ -150,7 +150,7 @@ async def test_unknown_tool_is_observed(tmp_path):
 
     result = await loop.run(Objective(description="Test objective"), build_definition())
 
-    assert "Unknown tool" in result.evidence[0].error
+    assert "Unknown tool" in result.observations[0].error
 
 
 async def test_on_turn_sees_each_tool_call_and_the_final_report(tmp_path):
@@ -221,7 +221,7 @@ async def test_an_unrecognized_severity_is_rejected_and_reaches_the_model(tmp_pa
     )
 
     assert result.completion_reason == "reported"
-    rejection = next(item for item in result.evidence if not item.success)
+    rejection = next(item for item in result.observations if not item.success)
     assert "severity" in rejection.error
     assert "catastrophic" in rejection.error
 
@@ -232,7 +232,7 @@ async def test_a_finding_naming_unknown_evidence_is_rejected(tmp_path):
     )
 
     assert result.completion_reason != "reported"
-    assert any("E9" in (item.error or "") for item in result.evidence)
+    assert any("E9" in (item.error or "") for item in result.observations)
 
 
 async def test_a_finding_missing_its_title_is_rejected(tmp_path):
@@ -241,7 +241,7 @@ async def test_a_finding_missing_its_title_is_rejected(tmp_path):
     result = await run_with_evidence(tmp_path, submitted, "E1")
 
     assert result.completion_reason != "reported"
-    assert any("title" in (item.error or "") for item in result.evidence)
+    assert any("title" in (item.error or "") for item in result.observations)
 
 
 async def test_a_finding_citing_no_evidence_is_rejected_when_evidence_exists(tmp_path):
@@ -250,7 +250,7 @@ async def test_a_finding_citing_no_evidence_is_rejected_when_evidence_exists(tmp
     result = await run_with_evidence(tmp_path, report({**FINDING, "evidence_refs": []}), "E1")
 
     assert result.completion_reason != "reported"
-    assert any("evidence_refs" in (item.error or "") for item in result.evidence)
+    assert any("evidence_refs" in (item.error or "") for item in result.observations)
 
 
 async def test_a_finding_citing_no_evidence_is_accepted_when_none_was_gathered(tmp_path):

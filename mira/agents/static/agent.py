@@ -28,6 +28,7 @@ from mira.reasoning.composition import (
     build_run_id,
     build_tracer,
 )
+from mira.reasoning.contracts.finding import Confidence, Finding, Severity
 from mira.reasoning.contracts.objective import Objective as LoopObjective
 from mira.reasoning.contracts.output import FinalOutput
 from mira.reasoning.definition.agent import AgentDefinition
@@ -35,6 +36,28 @@ from mira.reasoning.runtime.tool_runtime import ToolRuntime
 from mira.reasoning.runtime.trace import trace_provenance
 
 SOURCE_AGENT = "static"
+
+# Enum declaration order is ascending, so it doubles as the ranking.
+_SEVERITY_RANK = {member: rank for rank, member in enumerate(Severity)}
+_CONFIDENCE_RANK = {member: rank for rank, member in enumerate(Confidence)}
+
+
+def _overall_confidence(findings: list[Finding]) -> str:
+    """The specialist is as confident as it is in its most serious claim.
+
+    Not the highest confidence anywhere: a certain INFO finding says nothing
+    about how sure the specialist is of the thing that actually matters.
+    """
+    if not findings:
+        return Confidence.LOW.value
+    gravest = max(
+        findings,
+        key=lambda finding: (
+            _SEVERITY_RANK[finding.severity],
+            _CONFIDENCE_RANK[finding.confidence],
+        ),
+    )
+    return gravest.confidence.value
 
 
 class StaticAgent:
@@ -152,6 +175,14 @@ class StaticAgent:
             evidence=evidence,
         )
         return InvestigationFinding(
-            objective=objective, results=results, evidence=evidence, output=output
+            artifact_id=artifact_id,
+            # The verdict leads the assessment rather than taking a field of
+            # its own: section 10's payload names an assessment, and a reader
+            # needs the judgement in the sentence they are given.
+            assessment=f"{output.verdict}: {output.summary}",
+            findings=output.findings,
+            evidence_refs=[item.id for item in evidence],
+            confidence=_overall_confidence(output.findings),
+            recommended_actions=output.recommended_actions,
         )
 

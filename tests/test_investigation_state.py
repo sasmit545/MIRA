@@ -195,9 +195,10 @@ async def test_a_run_deposits_its_evidence_into_the_shared_state(tmp_path):
 
     finding = await investigate(tmp_path, "Assess packing", state)
 
-    assert len(state.evidence) == len(finding.evidence) == 1
-    for evidence in finding.evidence:
-        assert state.get_evidence_by_id(evidence.id) is evidence
+    assert len(state.evidence) == len(finding.evidence_refs) == 1
+    # The message carries identifiers; the records themselves live in the state.
+    for reference in finding.evidence_refs:
+        assert state.get_evidence_by_id(reference) is not None
 
 
 async def test_two_objectives_accumulate_rather_than_replace(tmp_path):
@@ -226,8 +227,7 @@ async def test_a_run_given_no_state_is_unaffected(tmp_path):
     """The CLI path supplies no shared state and must behave as before."""
     finding = await investigate(tmp_path, "Assess packing")
 
-    assert len(finding.evidence) == 1
-    assert finding.evidence[0].id == "E1"
+    assert finding.evidence_refs == ["E1"]
 
 
 async def test_the_deposit_is_logged_once_in_the_state_history(tmp_path):

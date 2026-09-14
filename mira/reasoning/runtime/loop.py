@@ -126,6 +126,7 @@ class AgentLoop:
             evidence=self._evidence(state),
             completion_reason=self._completion_reason(state, agent_def),
             metadata=self._metadata(state),
+            observations=self._observations(state),
         )
 
     def _record_report_failure(self, state: State, report: str, failure: str) -> None:
@@ -183,12 +184,18 @@ class AgentLoop:
                 completion_reason="reported",
                 metadata={**metadata, **self._metadata(state)},
                 recommended_actions=actions,
+                observations=self._observations(state),
             ),
             "",
         )
 
     @staticmethod
     def _evidence(state: State) -> list:
+        """Identifiers only. The observation behind one is resolved on demand."""
+        return [item.id for item in state.evidence]
+
+    @staticmethod
+    def _observations(state: State) -> list:
         return [
             observation["result"]
             for observation in state.observations
