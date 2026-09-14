@@ -6,9 +6,13 @@ from math import log2
 from mira.capabilities.static.common import read_region, result_error, result_ok, shannon_entropy
 
 
-def calculate_entropy(artifact: Artifact, *, offset: int | None = None, length: int | None = None) -> dict:
+def calculate_entropy(artifact: Artifact, *, offset: int | None = None, length: int | None = None, chunk_size: int | None = None) -> dict:
     if (offset is None) != (length is None):
         return result_error(artifact.artifact_id, "calculate_entropy", "INVALID_INPUT", "offset and length must be supplied together")
+    if chunk_size is not None and offset is None:
+        return result_error(artifact.artifact_id, "calculate_entropy", "INVALID_INPUT", "chunk_size requires offset and length")
+    if chunk_size is not None and chunk_size < 1:
+        return result_error(artifact.artifact_id, "calculate_entropy", "INVALID_INPUT", "chunk_size must be positive")
     try:
         if offset is None:
             counts = [0] * 256
@@ -21,11 +25,16 @@ def calculate_entropy(artifact: Artifact, *, offset: int | None = None, length: 
                 for count in counts
                 if count
             ) if artifact.size else 0.0
-            result_length = artifact.size
+            result = {"entropy": entropy, "offset": 0, "length": artifact.size}
         else:
             data = read_region(artifact, offset, length)
-            entropy = shannon_entropy(data)
-            result_length = len(data)
+            result = {"entropy": shannon_entropy(data), "offset": offset, "length": len(data)}
+            if chunk_size is not None:
+                chunks = []
+                for start in range(0, len(data), chunk_size):
+                    piece = data[start : start + chunk_size]
+                    chunks.append({"offset": offset + start, "length": len(piece), "entropy": shannon_entropy(piece)})
+                result["chunks"] = chunks
     except ValueError as error:
         return result_error(artifact.artifact_id, "calculate_entropy", "INVALID_INPUT", str(error))
-    return result_ok(artifact, "calculate_entropy", {"entropy": entropy, "offset": offset or 0, "length": result_length})
+    return result_ok(artifact, "calculate_entropy", result)

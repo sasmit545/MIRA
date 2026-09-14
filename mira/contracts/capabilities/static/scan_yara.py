@@ -14,10 +14,10 @@ class YaraMatch(Contract):
 
 
 class ScanYaraInput(Contract):
-    # TODO(pagination): limit/offset deferred - scan_yara returns every match.
-    # Add both with paginate(), the way extract_strings already does.
     artifact_id: str = Field(..., description="Identifier of the artifact")
     ruleset: str = Field(..., description="Name of a configured rule set to scan with")
+    limit: int = Field(100, ge=1, le=1000, description="Maximum number of items to return")
+    offset: int = Field(0, ge=0, description="Offset for pagination")
 
 
 class ScanYaraOutput(Contract):

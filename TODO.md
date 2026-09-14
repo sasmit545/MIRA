@@ -18,9 +18,56 @@ recovers from tool failures, and writes a run trace.
 Two commits are **unpushed**: `2ece585` (agent runnable end to end),
 `9e449c1` (capability contracts match implementations).
 
-All 11 MCP capabilities are reachable through the isolated worker.
-`run_capa` returns an honest `TOOL_NOT_AVAILABLE`; `scan_yara` needs a
-configured ruleset. Both are correct behaviour, not bugs.
+All 11 MCP capabilities are reachable through the isolated worker and all now
+have real implementations — `run_capa` runs flare-capa's vivisect backend and
+`scan_yara` runs yara-python, both against a rule set.
+
+Rules are **git submodules** — `rules/capa` (`mandiant/capa-rules`, pinned to
+the `v9.1.0` tag, matching the installed `flare-capa` major version) and
+`rules/signature-base` (`Neo23x0/signature-base`, pinned to whatever commit
+was current when added). `.gitmodules` records both; the superproject only
+stores a commit pointer per submodule, not the file content, so bumping a
+pin is a tiny diff regardless of how much the upstream rule set changed.
+
+**A plain `git clone` leaves both as empty directories** — that's how
+submodules work, not a bug. Run `scripts/fetch_rules.sh` (a thin
+`git submodule update --init --recursive` wrapper) once after cloning; CI
+does this too (`.circleci/config.yml`). `wiring.py` falls back to
+`rules/capa` / `rules/signature-base/yara` whenever `MIRA_CAPA_RULES_DIR` /
+`MIRA_YARA_RULES_DIR` aren't set — if the submodules were never initialized
+that fallback resolves to nothing and both capabilities just report
+`TOOL_NOT_AVAILABLE`, silently, so if either stops working the first thing to
+check is `git submodule status`.
+
+To update to a newer upstream version:
+```bash
+git -C rules/capa fetch --tags && git -C rules/capa checkout <new-tag>
+git -C rules/signature-base pull origin master
+git add rules/capa rules/signature-base && git commit
+```
+
+Unlike a plain vendored copy, submodules can't be trimmed to just the files
+each capability reads — `rules/signature-base` carries its full repo
+(`iocs/`, `misc/`, `vendor/`, tests, CI config, none of it touched by
+`scan_yara`) alongside the `yara/` subtree that actually matters.
+
+Verified against both real corpora before the submodule switch (capa-rules
+and signature-base content is identical at the pins above; only the
+packaging — trimmed vendored copy vs. full submodule checkout — changed):
+
+- `run_capa` against the full ~1000-rule capa-rules set took **24-36s** on a
+  trivial synthetic PE (vivisect's cost, not rule count) — `wiring.py` bumps
+  the default timeout to 90s automatically once a capa rules dir resolves
+  (vendored or configured); override `MIRA_ANALYSIS_TIMEOUT_SECONDS` directly
+  if that's still not enough for real-sized samples.
+- `scan_yara` compiles and scans **751/751** signature-base files cleanly.
+  13 of them need YARA external variables (`filename`, `filepath`,
+  `extension`, `filetype`, `owner`, `imphash` — the LOKI/THOR convention);
+  `scan_yara` now declares all six on every compile. `filename`/`filepath`/
+  `extension`/`imphash` are real facts about the artifact; `filetype`/`owner`
+  have no reliable equivalent here (no THOR-taxonomy classifier, no live
+  filesystem ACL) and are best-effort placeholders — rules gated on them
+  just don't match, which is correct, not an error.
 
 ---
 
@@ -29,10 +76,10 @@ configured ruleset. Both are correct behaviour, not bugs.
 | Decision | Rationale |
 |---|---|
 | **Keep both architectures.** The Coordinator assigns the objective; the reasoning loop chooses tools within it. | Matches `plan/PLAN_MCP_SERVER.md`'s success criterion: *evidence causes the Coordinator to assign a different objective*. `plan/phase1.md` describes a single agent with no Coordinator — that plan is **superseded** on this point. |
-| **Contract inputs were bent to match handlers**, not the reverse. | Implementing pagination in `run_capa`/`scan_yara` is real feature work. Deferrals are marked `TODO(pagination)` at each contract. |
-| **Output contracts stay unreconciled for now.** | All 11 disagree with what handlers return. It does not block the agent, which uses the untyped `client.invoke()` path and never validates outputs. |
+| **Contract inputs were bent to match handlers**, not the reverse. | Now moot: `run_capa`, `scan_yara`, and `disassemble_function` all page with `limit`/`offset` via the shared `paginate()` helper, and their contracts match. |
+| **Output contracts are reconciled.** | All 11 handlers match what their contracts declare; `StaticMCPServer` rejects a drift as `CONTRACT_VIOLATION`. |
 | **Do not build Dynamic/Forensics agents yet.** | Deferred in the scope doc, and no dynamic capabilities exist for them to call. Scaffolding for agents that cannot act is the trap to avoid. |
-| **Model: `gemini-3.6-flash`.** | `gemini-pro` and `gemini-2.5-flash` are both refused for new keys. `list_models()` still advertises models the key cannot call — trust the error, not the listing. Override with `GEMINI_MODEL`. |
+| **Model: `grok-4.6` via Azure AI Foundry (OpenAI-compatible API).** | Replaced Gemini: `google-generativeai` was end-of-life and its free tier's 5 req/min quota made multi-turn runs unusable. Override with `MODEL_NAME`; key goes in `MODEL_API_KEY`. |
 
 ---
 
@@ -165,10 +212,8 @@ A rename today; a refactor across three agents later.
 - `dynamic_agent.py`, `forensics_agent.py`, and their MCP servers
 - Specialist selection in the Coordinator (it assigns static objectives only
   this milestone)
-- Pagination for `run_capa`, `scan_yara`, `disassemble_function`
-  (`TODO(pagination)` markers mark each site)
-- Chunked entropy (`chunk_size`, `chunks[]`) — the handler measures the whole
-  file or one bounded region
-- Reconciling the 11 output contracts
-- Migrating off `google-generativeai` (end-of-life; warns on every run) to
-  `google-genai`, which installs cleanly as `google-genai 2.23.0`
+- Auto-updating the `rules/` submodule pins. Bumping them is a manual
+  `git checkout <tag>` + commit for now (see above), not scheduled or
+  automatic.
+- capa's rule cache (`enable_cache=False` always) — fine for the ~1000-rule
+  set at 24-36s a call, would matter more against something larger

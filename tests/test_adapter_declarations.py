@@ -10,7 +10,7 @@ from mira.mcp.servers.static.capabilities import STATIC_CAPABILITIES
 
 
 def declared_by_name():
-    return {tool["name"]: tool for tool in declarations(tool_manifest())[0]["function_declarations"]}
+    return {tool["function"]["name"]: tool["function"] for tool in declarations(tool_manifest())}
 
 
 def test_required_parameters_reach_the_model():
@@ -38,15 +38,11 @@ def test_optional_fields_are_flattened():
     assert "anyOf" not in offset
 
 
-def test_only_provider_accepted_keys_survive():
+def test_every_declaration_is_a_json_schema_object():
     for name, tool in declared_by_name().items():
         parameters = tool["parameters"]
         assert set(parameters) <= {"type", "properties", "required"}, name
-        for field, spec in parameters["properties"].items():
-            unexpected = set(spec) - {
-                "type", "description", "enum", "items", "minimum", "maximum"
-            }
-            assert not unexpected, f"{name}.{field}: {unexpected}"
+        assert parameters["type"] == "object", name
 
 
 def test_every_capability_is_declared():

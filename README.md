@@ -1,1177 +1,199 @@
-# MIRA
-[![CircleCI](https://circleci.com/gh/USERNAME/REPO.svg?style=svg)](https://circleci.com/gh/USERNAME/REPO)
-## Continuous Integration
-This project uses CircleCI for continuous integration. The pipeline runs on every push and pull request to test the code.
+<a id="readme-top"></a>
 
-## Multi-Agent Investigation and Reasoning Architecture
+<div align="center">
 
-**MIRA** is an adaptive multi-agent architecture for evidence-driven malware investigation.
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0f172a,100:4f46e5&height=180&section=header&text=MIRA&fontSize=70&fontColor=ffffff&animation=fadeIn&fontAlignY=38&desc=Multi-Agent%20Malware%20Investigation%20System&descAlignY=58&descSize=18" width="100%" alt="MIRA"/>
 
-MIRA treats malware analysis as an **investigation process** rather than a fixed sequence of analysis stages. The system continuously determines what should be investigated next based on the evidence, artifacts, hypotheses, and investigation status accumulated so far.
+<img src="https://readme-typing-svg.demolab.com/?font=Fira+Code&size=16&pause=1400&color=6366F1&center=true&vCenter=true&width=760&lines=Coordinator+decides+WHO+should+investigate;Specialist+decides+WHAT%2FHOW+within+its+domain;MCP+provides+the+execution+interface;Shared+state+records+WHAT+WAS+LEARNED" alt="Typing SVG" />
 
-> **Coordinator decides WHO investigates next.  
-> Specialist decides HOW to investigate.  
-> Evidence determines WHAT happens next.**
+[![CircleCI](https://circleci.com/gh/sasmit545/MIRA.svg?style=svg)](https://circleci.com/gh/sasmit545/MIRA)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![status](https://img.shields.io/badge/status-static%20slice%20working-brightgreen)
+![last commit](https://img.shields.io/github/last-commit/sasmit545/MIRA?color=6366F1)
+![issues](https://img.shields.io/github/issues/sasmit545/MIRA?color=6366F1)
 
----
+<br/>
 
-## 1. Core Idea
+![pefile](https://img.shields.io/badge/pefile-PE%20parsing-0f172a?style=flat-square)
+![capstone](https://img.shields.io/badge/capstone-disassembly-0f172a?style=flat-square)
+![yara--python](https://img.shields.io/badge/yara--python-scanning-0f172a?style=flat-square)
+![flare--capa](https://img.shields.io/badge/flare--capa-capability%20detection-0f172a?style=flat-square)
+![FastMCP](https://img.shields.io/badge/FastMCP-capability%20layer-0f172a?style=flat-square)
+![pydantic](https://img.shields.io/badge/pydantic-contracts-0f172a?style=flat-square)
 
-A conventional malware-analysis pipeline may follow a fixed workflow:
-
-```text
-Static Analysis
-      ?
-Dynamic Analysis
-      ?
-Forensics
-      ?
-Report
-```
-
-MIRA instead uses an adaptive investigation loop:
-
-```text
-Malware Sample
-      ?
-Investigation State
-      ?
-Coordinator
-      ?
-Select Specialist + Objective
-      ?
-Specialist Reasoning
-      ?
-Select Capability
-      ?
-MCP
-      ?
-Analysis Tool
-      ?
-Evidence / Artifacts
-      ?
-Update Investigation State
-      ?
-Update Hypotheses
-      ?
-Coordinator
-      ?
-Select Next Investigation
-      ?
-...
-```
-
-The investigation path can therefore differ between malware samples depending on what has already been discovered.
+</div>
 
 ---
 
-# 2. Architecture
+## Executive summary
 
-MIRA consists of four primary layers.
+MIRA is an adaptive multi-agent malware investigation system: a small set of domain-specialist agents reason over an evolving investigation state and use **MCP servers** to access analysis tools. It is deliberately **not** a fixed static → dynamic → memory pipeline — each specialist runs its own local investigation loop, while a Coordinator runs a global loop that keeps reallocating work as evidence, hypotheses, and artifacts change. A newly discovered artifact re-enters shared state and can trigger another cycle, including re-analysis with different tools.
 
-## 2.1 Investigation Layer
+## Design goals
 
-### Coordinator
+- Adaptive investigation, not a predetermined pipeline
+- A small number of specialists, each with real, distinct expertise
+- Agent-local iterative reasoning and tool-use loops
+- A global coordination loop driven by evolving evidence
+- MCP-based extensibility — new tools plug in without redesigning the system
+- Minimal Coordinator context: specialists return concise findings, not raw tool output
+- Strong provenance, evidence traceability, artifact lineage, reproducibility
 
-The Coordinator manages the **global investigation strategy**.
+## Core principles
 
-Responsibilities:
+| Principle | Meaning |
+|---|---|
+| **Artifact-centric** | The unit of investigation is an artifact, not a pipeline stage |
+| **Specialist-centric** | Agents represent coherent investigative expertise, not individual tools |
+| **MCP-mediated execution** | Agents reach tools only through their domain MCP server |
+| **Dual-loop reasoning** | Every specialist runs a local loop; the Coordinator runs a global loop |
+| **State over transcript** | Evidence/artifacts live in shared state; messages carry compact references, not raw output |
+| **Open-ended extensibility** | New MCP tools register without touching the Coordinator contract |
 
-- Understand the current investigation state.
-- Identify important evidence and unresolved hypotheses.
-- Determine what should be investigated next.
-- Select the appropriate specialist.
-- Assign an investigation objective.
-- Decide whether an investigation should continue, revisit an earlier analysis, or terminate.
+## Dual-level investigation loops
 
-The Coordinator should **not directly execute malware-analysis tools**.
+**Specialist-local loop** — the specialist iterates on its own until satisfied, without pinging the Coordinator after every tool call:
 
----
-
-## 2.2 Specialist Layer
-
-Specialist agents perform domain-specific investigation.
-
-Initial specialists:
-
-### Static Agent
-
-Responsible for static investigation, including capabilities such as:
-
-- PE/file metadata
-- Strings
-- Imports/exports
-- Sections
-- Suspicious APIs
-- Resources
-- Signatures
-- Disassembly/decompilation where available
-
-### Dynamic Agent
-
-Responsible for runtime investigation, including:
-
-- Process behavior
-- File operations
-- Registry activity
-- Process creation
-- Network activity
-- Runtime payload behavior
-- Memory behavior
-- Payload extraction
-
-### Forensics Agent
-
-Responsible for forensic investigation, including:
-
-- Memory artifacts
-- Process relationships
-- Injected code
-- Persistence artifacts
-- Extracted payloads
-- Artifact relationships
-- Evidence validation
-
-The architecture should remain extensible so additional specialists can be added later.
-
-Possible future specialists:
-
-- Network Agent
-- Memory Agent
-- Reverse Engineering Agent
-- Threat Intelligence Agent
-- Sandbox Agent
-
----
-
-# 3. Capability Layer
-
-MIRA uses **MCP as the capability layer**.
-
-The main principle is:
-
-```text
-Agent Reasoning
-      ?
-Tool Execution
+```
+Specialist ─▶ Plan ─▶ select/invoke MCP tool ─▶ analyze result
+                 ▲                                   │
+                 └── objective not yet satisfied ◀────┘
+                                   │
+                          satisfied → concise finding
 ```
 
-Agents reason about the investigation and select capabilities.
+**Global coordination loop** — the Coordinator re-plans whenever new information could change strategy. The next specialist is never predetermined: a sample can go Static → Dynamic → Static → Forensics → Static, or any other order the evidence justifies.
 
-MCP exposes analysis capabilities through standardized interfaces.
-
-```text
-Specialist Agent
-      ?
-Capability Selection
-      ?
-MCP
-      ?
-Analysis Tool
-      ?
-Structured Result
-      ?
-Specialist
+```
+Shared Investigation State ─▶ Coordinator ─▶ select specialist + objective
+        ▲                                              │
+        └── finding / artifact / evidence update ◀─────┘
 ```
 
-This provides:
+## Agents
 
-- Modularity
-- Extensibility
-- Tool isolation
-- Auditability
-- Specialist-specific capabilities
+| Agent | Scope | Boundary |
+|---|---|---|
+| **Coordinator** | Cross-domain investigation management — assigns objectives, correlates findings, decides where investigation continues | Never executes low-level analysis, doesn't know individual tools |
+| **Static** | Non-executing code/binary investigation — PE structure, imports, strings, entropy, signatures, packing, disassembly, CFG | Chooses and sequences static tools internally |
+| **Dynamic** | Observed execution behavior — sandboxing, process/API activity, filesystem, registry, network telemetry | Network analysis is a *capability* here, not a separate mandatory agent |
+| **Forensics** | Runtime/memory-state investigation — memory dumps, injected code, unpacked payloads, shellcode, reflective loading | Focuses on runtime state, not ordinary execution telemetry |
 
-Adding or replacing an analysis tool should not require redesigning the agent.
+A new specialist is only justified when a domain needs genuinely distinct expertise and its own autonomous loop — see [Design decisions to preserve](#design-decisions-to-preserve).
 
----
+## MCP capability layer
 
-# 4. Shared Investigation State
+Each specialist owns a domain MCP server. The server is a tool boundary, not an agent — the specialist decides which of its available tools are useful for the objective at hand.
 
-The investigation state is the **memory of the investigation**.
-
-It should contain four major categories.
-
-## 4.1 Artifacts and Lineage
-
-Track what was discovered and where it came from.
-
-Example:
-
-```text
-malware.exe
-    ?
-decrypted payload
-    ?
-payload.bin
-    ?
-shellcode
+```
+Static Agent ──▶ Static MCP ──▶ PE/ELF/.NET · YARA/capa · strings/entropy · disassembly …
+Dynamic Agent ─▶ Dynamic MCP ─▶ sandbox · process/API monitor · filesystem/registry · network capture …
+Forensics Agent ▶ Forensics MCP ▶ memory acquisition · injection analysis · shellcode/payload extraction …
 ```
 
-Example representation:
+Agent identity stays stable while the tool set underneath it evolves — new capabilities register through MCP without adding an agent or touching the Coordinator's contract.
 
-```json
-{
-  "artifact_id": "artifact_004",
-  "type": "shellcode",
-  "source": "artifact_003",
-  "derived_by": "dynamic_agent",
-  "tool": "memory_dump"
-}
+## Inter-agent contract
+
+Agents exchange decisions and references, never raw tool output.
+
+| Message | Direction | Payload |
+|---|---|---|
+| `INVESTIGATE` | Coordinator → Specialist | `artifact_id`, objective, constraints |
+| `FINDING` | Specialist → Coordinator | `artifact_id`, assessment, evidence refs, confidence, recommended actions |
+| `ARTIFACT` | Specialist → Coordinator | `artifact_id`, `parent_id`, relation, type, provenance |
+| `REQUEST_SPECIALIST` | Specialist → Coordinator | target role, `artifact_id`, objective, reason |
+| `STATUS` | Specialist → Coordinator | `task_id`, status, blocking reason |
+
+## What's actually built
+
+The **static-analysis vertical slice** runs end to end: an LLM-driven agent investigates a PE sample, freely choosing among 11 static-analysis tools, recovering from tool failures, and writing a full run trace. The CLI prints each tool call and its result live as the investigation runs, and reports the tokens spent (prompt/completion/total) alongside the final verdict.
+
+```bash
+python -m mira.reasoning.main sample.exe \
+    --objective "Identify suspicious behavior" \
+    --max-turns 5 --max-tool-calls 5 --trace-dir runs
+    # --quiet to suppress the live per-turn output
 ```
 
-Every derived artifact should retain provenance whenever possible.
+Everything above the line is the target architecture. Today, concretely:
 
----
+- `mira/core/coordinator.py` is a **minimal stub** — it assigns Static objectives only, from a hand-rolled evidence check, not yet the global loop over all three specialists
+- The `INVESTIGATE`/`FINDING`/`ARTIFACT`/`REQUEST_SPECIALIST`/`STATUS` contract above is design intent — Static runs standalone today, there's no message-passing Coordinator↔Specialist wiring yet
+- Dynamic and Forensics agents/MCP servers don't exist yet; only Static is implemented
+- The specialist-local loop (plan → select tool → analyze → refine) **is** real, in `mira/reasoning/runtime/loop.py`
 
-## 4.2 Evidence and Findings
+## Layout
 
-Store observations produced by agents and tools.
+| Package | Responsibility |
+|---|---|
+| `mira.core` | Shared state — `Artifact`, `Evidence`, `Hypothesis`, `Task`, `Coordinator` |
+| `mira.reasoning` | Agent runtime: model adapter, tool-calling loop, tracing, output contracts |
+| `mira.agents.static` | Static specialist definition + tool wiring |
+| `mira.capabilities.static` | The actual analysis code (pefile, capstone, yara-python, flare-capa) |
+| `mira.contracts.capabilities` | Typed request/result schemas each capability speaks |
+| `mira.mcp` | MCP client, capability registry, and the isolated worker capabilities run inside |
 
-Example:
+### Static capabilities
 
-```text
-Observation:
-"Payload is decrypted in memory."
+`analyze_pe` · `extract_strings` · `list_imports` · `list_exports` · `disassemble` · `analyze_functions` · `detect_packer` · `compute_entropy` · `file_info` · `run_capa` · `scan_yara`
 
-Source:
-Dynamic Agent
+`run_capa` and `scan_yara` match against real, pinned rule sets vendored as git submodules — [capa-rules](https://github.com/mandiant/capa-rules) and [signature-base](https://github.com/Neo23x0/signature-base).
 
-Capability:
-memory_dump
+## Efficiency strategy
 
-Confidence:
-0.91
+- Don't expose every tool to the Coordinator — let specialists pick tools locally
+- Prefer targeted analysis based on artifact type and objective, not "run everything"
+- Skip re-analysis when the artifact and relevant state haven't changed
+- Treat every newly created artifact as a fresh investigation opportunity
+- Pass evidence references, not full observations, into agent prompts
+
+## Security and governance
+
+- Dynamic execution runs in an isolated analysis environment (`mira/mcp/isolation.py`)
+- MCP tools expose narrowly scoped operations with explicit input schemas
+- Tool execution is auditable through provenance and run traces
+- Artifacts are treated as immutable/versioned once registered, so evidence stays reproducible
+- The Coordinator never bypasses specialist/MCP boundaries to run a tool directly
+
+## Design decisions to preserve
+
+- No fixed Static → Dynamic → Memory ordering
+- No agent-per-tool design
+- No raw tool-output flooding of the Coordinator
+- No mandatory standalone Network Agent — network analysis is a Dynamic capability
+- No Artifact Agent — artifact management is shared infrastructure, not an agent
+- Specialists may iterate locally before reporting
+- Every meaningful new artifact returns to the global investigation loop
+
+<div align="center">
+<img src="https://capsule-render.vercel.app/api?type=rect&color=0:0f172a,100:4f46e5&height=3&width=100%25" width="100%" alt=""/>
+</div>
+
+## Getting started
+
+```bash
+git clone https://github.com/sasmit545/MIRA.git
+cd MIRA
+git submodule update --init --recursive   # or: scripts/fetch_rules.sh
+pip install -e ".[dev]"
+pytest -q
 ```
 
-Evidence should ideally contain:
+A plain clone leaves `rules/capa` and `rules/signature-base` empty — that's how submodules work. If you skip `git submodule update --init`, the CLI fails immediately with a message telling you to run it, instead of `run_capa`/`scan_yara` silently degrading mid-investigation.
 
-- Unique ID
-- Observation
-- Source agent
-- Capability/tool
-- Related artifact
-- Confidence
-- Provenance
-- Timestamp
+## Model
 
----
+The reasoning loop talks to Grok via Azure AI Foundry (`mira/reasoning/model/adapter.py`). Tests inject a scripted model, so the suite runs with no live API calls.
 
-## 4.3 Hypotheses and Confidence
+## Design notes
 
-MIRA should explicitly represent what the system currently believes.
+Full architecture rationale, message contracts, and the example investigation walkthrough live in the original design document (`multi_agent_malware_investigation_design.docx`). Phase planning docs are in [`plan/`](plan); `TODO.md` has the current handoff notes.
 
-Example:
+<div align="center">
 
-```text
-H1:
-Payload contains process-injection capability.
+[⬆ back to top](#readme-top)
 
-Confidence:
-0.72
-```
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:4f46e5,100:0f172a&height=100&section=footer" width="100%" alt=""/>
 
-Hypotheses can be:
-
-```text
-OPEN
-SUPPORTED
-WEAKENED
-CONFIRMED
-REJECTED
-```
-
-Example:
-
-```json
-{
-  "hypothesis_id": "H1",
-  "statement": "Payload performs process injection",
-  "confidence": 0.72,
-  "status": "open"
-}
-```
-
-Evidence should be linked to the hypotheses it supports or contradicts.
-
----
-
-## 4.4 Tasks and Status
-
-Track:
-
-- Completed investigations
-- Active investigations
-- Pending investigations
-- Failed investigations
-- Unresolved questions
-
-Example:
-
-```text
-[?] Extract strings
-[?] Inspect imports
-[?] Execute sample
-[ ] Investigate process injection
-[ ] Analyze decrypted payload
-```
-
----
-
-# 5. Adaptive Investigation Loop
-
-This is the central mechanism of MIRA.
-
-MIRA should **not generate the entire investigation plan upfront**.
-
-Instead:
-
-```text
-1. Observe current state
-2. Identify important evidence/hypotheses
-3. Identify unresolved investigation questions
-4. Select the next specialist
-5. Assign an investigation objective
-6. Specialist decides how to investigate
-7. Specialist selects required capabilities
-8. MCP executes the capability
-9. Receive structured results
-10. Add evidence and artifacts to state
-11. Update hypotheses and confidence
-12. Re-evaluate the investigation
-13. Select the next action
-14. Repeat until sufficient investigation is completed
-```
-
-Conceptual pseudocode:
-
-```python
-while not investigation_finished(state):
-
-    objective = coordinator.select_next_investigation(state)
-
-    specialist = coordinator.select_specialist(
-        objective,
-        state
-    )
-
-    result = specialist.investigate(
-        objective,
-        state
-    )
-
-    state = update_state(
-        state,
-        result
-    )
-
-    state = update_hypotheses(
-        state,
-        result
-    )
-```
-
-The defining property is:
-
-> **The next investigation depends on the newly updated state.**
-
----
-
-# 6. Two-Level Reasoning
-
-MIRA separates reasoning into two levels.
-
-## Global Reasoning
-
-Performed by the Coordinator.
-
-Question:
-
-> **What should happen next?**
-
-The Coordinator considers:
-
-- Current evidence
-- Hypotheses
-- Confidence
-- Unresolved questions
-- Available specialists
-- Previous tasks
-- Investigation history
-
-and selects the next investigation.
-
-## Local Reasoning
-
-Performed by the Specialist.
-
-Question:
-
-> **How should I investigate it?**
-
-The specialist decides:
-
-- Which capabilities are useful
-- Which tools to invoke
-- What parameters to use
-- How to interpret results
-- Whether additional investigation is required
-
-This separation should remain a core architectural constraint.
-
----
-
-# 7. Example Investigation
-
-Suppose MIRA receives:
-
-```text
-sample.exe
-```
-
-### Step 1 — Static Investigation
-
-The Coordinator selects the Static Agent.
-
-Objective:
-
-```text
-Identify suspicious executable characteristics
-and determine whether further behavioral investigation
-is warranted.
-```
-
-The Static Agent executes relevant capabilities.
-
-Possible findings:
-
-```text
-- Suspicious imports
-- Encoded strings
-- Resource containing executable-like data
-```
-
-The findings are added to the shared state.
-
----
-
-### Step 2 — Hypothesis Formation
-
-Based on the new evidence:
-
-```text
-H1:
-Sample contains an embedded payload.
-
-Confidence:
-0.76
-```
-
-The Coordinator determines that runtime investigation is useful.
-
----
-
-### Step 3 — Dynamic Investigation
-
-The Coordinator selects the Dynamic Agent.
-
-Objective:
-
-```text
-Determine whether the embedded payload is decoded
-or executed at runtime.
-```
-
-The Dynamic Agent selects appropriate capabilities.
-
-Possible result:
-
-```text
-Payload observed in process memory.
-```
-
-A new artifact is created:
-
-```text
-payload.bin
-```
-
-Lineage:
-
-```text
-sample.exe
-    ?
-runtime memory
-    ?
-payload.bin
-```
-
----
-
-### Step 4 — Hypothesis Update
-
-The Coordinator updates the investigation state.
-
-For example:
-
-```text
-H2:
-Payload may perform process injection.
-
-Confidence:
-0.72
-```
-
-The Coordinator may now select the Forensics Agent.
-
-Objective:
-
-```text
-Investigate evidence supporting or rejecting
-process injection.
-```
-
-The investigation continues according to the evidence.
-
----
-
-# 8. Project Structure
-
-Recommended initial structure:
-
-```text
-mira/
-¦
-+-- README.md
-+-- main.py
-¦
-+-- config/
-¦   +-- config.yaml
-¦
-+-- core/
-¦   +-- coordinator.py
-¦   +-- investigation.py
-¦   +-- state.py
-¦   +-- evidence.py
-¦   +-- artifact.py
-¦   +-- hypothesis.py
-¦   +-- task.py
-¦
-+-- agents/
-¦   +-- base_agent.py
-¦   +-- static_agent.py
-¦   +-- dynamic_agent.py
-¦   +-- forensics_agent.py
-¦
-+-- mcp/
-¦   +-- client.py
-¦   +-- capability_registry.py
-¦   +-- servers/
-¦
-+-- capabilities/
-¦   +-- static/
-¦   +-- dynamic/
-¦   +-- forensics/
-¦
-+-- storage/
-¦   +-- state_store.py
-¦   +-- artifacts/
-¦
-+-- prompts/
-¦   +-- coordinator.txt
-¦   +-- static_agent.txt
-¦   +-- dynamic_agent.txt
-¦   +-- forensics_agent.txt
-¦
-+-- evaluation/
-¦   +-- metrics.py
-¦   +-- benchmark.py
-¦
-+-- tests/
-```
-
-Keep the implementation modular. The architecture should not depend on one specific LLM, MCP server, or malware-analysis tool.
-
----
-
-# 9. Initial Data Model
-
-Start with simple structured objects.
-
-## InvestigationState
-
-```python
-class InvestigationState:
-
-    sample = None
-
-    artifacts = []
-    evidence = []
-    hypotheses = []
-    tasks = []
-
-    history = []
-
-    status = "running"
-```
-
-## InvestigationTask
-
-```python
-class InvestigationTask:
-
-    id = None
-    objective = None
-    specialist = None
-
-    status = None
-
-    depends_on = []
-    evidence_required = []
-```
-
-## Evidence
-
-```python
-class Evidence:
-
-    id = None
-
-    observation = None
-
-    source_agent = None
-    capability = None
-
-    artifact_id = None
-
-    confidence = 0.0
-
-    provenance = None
-```
-
-## Hypothesis
-
-```python
-class Hypothesis:
-
-    id = None
-    statement = None
-
-    confidence = 0.0
-
-    supporting_evidence = []
-    contradicting_evidence = []
-
-    status = "open"
-```
-
-These models can evolve after the first working investigation loop.
-
----
-
-# 10. Coordinator Interface
-
-The Coordinator should operate over structured investigation state.
-
-Input:
-
-```text
-InvestigationState
-```
-
-Output:
-
-```text
-NextInvestigation
-```
-
-Example:
-
-```json
-{
-  "specialist": "dynamic",
-  "objective": "Determine whether the embedded payload is decrypted during execution.",
-  "priority": 0.91,
-  "reason": "Static evidence indicates an embedded executable payload."
-}
-```
-
-The Coordinator's responsibility is **investigation planning**, not direct tool execution.
-
----
-
-# 11. Specialist Interface
-
-Each specialist receives:
-
-```text
-Current State
-+
-Investigation Objective
-```
-
-and produces:
-
-```text
-Evidence
-+
-Artifacts
-+
-Hypothesis Updates
-+
-Investigation Status
-```
-
-Example:
-
-```text
-Dynamic Agent
-
-Objective:
-Determine whether embedded payload is decrypted at runtime.
-
-Reasoning:
-1. Execute sample in a controlled environment.
-2. Monitor memory changes.
-3. Search memory for PE-like structures.
-4. Extract candidate payload.
-5. Compare with static artifacts.
-
-Output:
-- New artifact: payload.bin
-- Evidence: payload appears in memory after execution
-- Hypothesis H1 confidence increased
-```
-
----
-
-# 12. MCP Capability Design
-
-Do not tightly couple agents to individual tools.
-
-Expose capabilities such as:
-
-```text
-analyze_pe
-extract_strings
-list_imports
-disassemble
-execute_sample
-capture_network
-dump_memory
-extract_process
-search_memory
-```
-
-The specialist interacts with a capability interface:
-
-```text
-Capability:
-dump_memory
-
-Input:
-process_id
-
-Output:
-memory_dump
-```
-
-The underlying implementation can later be replaced without changing the specialist's reasoning logic.
-
----
-
-# 13. Evidence-First Design
-
-Avoid making MIRA:
-
-```text
-LLM decides everything
-```
-
-Instead:
-
-```text
-Analysis Tools
-      ?
-Structured Observations
-      ?
-Evidence
-      ?
-Hypotheses
-      ?
-Coordinator Decision
-      ?
-Next Investigation
-```
-
-The system should reason over evidence rather than inventing investigation state.
-
-Important decisions should be traceable:
-
-```text
-Decision
-   ?
-Evidence
-   ?
-Artifact / Tool Result
-```
-
-This makes the system easier to debug, evaluate, and reproduce.
-
----
-
-# 14. Investigation History
-
-Maintain a complete investigation trace.
-
-Example:
-
-```text
-T1
-Static Agent
-    ?
-PE Analysis
-    ?
-Evidence E1
-
-T2
-Static Agent
-    ?
-Resource Extraction
-    ?
-Evidence E2
-
-T3
-Coordinator
-    ?
-Hypothesis H1 Created
-
-T4
-Dynamic Agent
-    ?
-Memory Analysis
-    ?
-Artifact A4
-
-T5
-Coordinator
-    ?
-H1 Confidence Updated
-    ?
-Forensics Agent Selected
-```
-
-This history is important for:
-
-- Debugging
-- Reproducibility
-- Evaluation
-- Provenance
-- Explaining decisions
-
----
-
-# 15. First Implementation Goal
-
-Do **not** begin by implementing every malware-analysis capability.
-
-Build the smallest complete loop first:
-
-```text
-Sample
-  ?
-Coordinator
-  ?
-One Specialist
-  ?
-One MCP Capability
-  ?
-Evidence
-  ?
-State Update
-  ?
-Coordinator
-  ?
-Next Action
-```
-
-Once this works, add:
-
-```text
-Static
-    ?
-Dynamic
-    ?
-Forensics
-```
-
-and then expand the capability set.
-
-The first milestone should demonstrate:
-
-> **The system changes its next investigation because of newly discovered evidence.**
-
-That is more important than having a large number of tools.
-
----
-
-# 16. Safety and Execution Boundary
-
-Malware analysis capabilities should execute inside an appropriately isolated analysis environment.
-
-Keep the architecture separated into:
-
-```text
-Reasoning Layer
-      ?
-Capability Interface
-      ?
-Isolated Analysis Environment
-      ?
-Structured Results
-```
-
-The agents should not directly access the host system or unrestricted execution environment.
-
-Tool execution should be controlled, logged, and auditable.
-
----
-
-# 17. Evaluation
-
-MIRA should be evaluated as an **adaptive investigation system**, not only as a malware classifier.
-
-Important evaluation dimensions:
-
-## Adaptivity
-
-Does MIRA select different investigation paths for different malware samples?
-
-## Evidence Utilization
-
-Does newly discovered evidence influence subsequent actions?
-
-## Investigation Efficiency
-
-Does MIRA avoid unnecessary analysis?
-
-## Hypothesis Quality
-
-Does evidence appropriately increase or decrease hypothesis confidence?
-
-## Specialist Selection
-
-Does the Coordinator select an appropriate specialist for the current investigation objective?
-
-## Capability Selection
-
-Does the specialist select useful capabilities?
-
-## Investigation Completeness
-
-Does the system discover relevant malware behaviors and artifacts?
-
-## Reproducibility
-
-Can the complete investigation trace be reconstructed?
-
----
-
-# 18. Baselines
-
-Potential baselines:
-
-```text
-Fixed Analysis Pipeline
-        vs
-Single-Agent Malware Analysis
-        vs
-Multi-Agent Malware Analysis
-        vs
-MIRA
-```
-
-A particularly important experiment is:
-
-```text
-Fixed Pipeline
-      vs
-MIRA
-```
-
-The goal is to demonstrate that MIRA does not merely run more agents or more tools.
-
-It **changes the investigation trajectory based on evidence**.
-
----
-
-# 19. What MIRA Is Not
-
-MIRA is not simply:
-
-- A chatbot for malware analysis
-- A fixed malware-analysis pipeline
-- Multiple independent agents running in parallel
-- An LLM wrapper around existing tools
-- A replacement for malware-analysis tools
-- A system tightly coupled to one tool
-- A system limited to exactly three specialists
-
-MIRA is an **adaptive investigation architecture**.
-
----
-
-# 20. Architecture Summary
-
-```text
-                         MIRA
-                          ¦
-                          ?
-                 +-----------------+
-                 ¦   Coordinator   ¦
-                 ¦ Global Reasoning¦
-                 +-----------------+
-                          ¦
-                   Select Specialist
-                          ¦
-            +-------------+-------------+
-            ?             ?             ?
-       +---------+   +---------+   +-----------+
-       ¦ Static  ¦   ¦ Dynamic ¦   ¦ Forensics ¦
-       ¦  Agent  ¦   ¦  Agent  ¦   ¦   Agent   ¦
-       +---------+   +---------+   +-----------+
-            ¦             ¦              ¦
-            +-------------+--------------+
-                          ?
-                   +------------+
-                   ¦    MCP     ¦
-                   ¦Capabilities¦
-                   +------------+
-                         ?
-                   Analysis Tools
-                         ¦
-                         ?
-                +------------------+
-                ¦ Investigation    ¦
-                ¦      State       ¦
-                +------------------¦
-                ¦ Evidence         ¦
-                ¦ Artifacts        ¦
-                ¦ Lineage          ¦
-                ¦ Hypotheses       ¦
-                ¦ Confidence       ¦
-                ¦ Tasks            ¦
-                +------------------+
-                         ¦
-                         ¦ Feedback
-                         ?
-                   Coordinator
-                         ¦
-                         ?
-                      NEXT STEP
-```
-
----
-
-# 21. Guiding Principle
-
-Everything in the implementation should preserve:
-
-> **Coordinator decides WHO.  
-> Specialist decides HOW.  
-> Evidence determines WHAT NEXT.**
-
-If a component violates this separation, reconsider its responsibility.
-
----
-
-# 22. Development Roadmap
-
-## Phase 1 — Core Skeleton
-
-- [ ] Create project structure
-- [ ] Define InvestigationState
-- [ ] Define Evidence
-- [ ] Define Artifact
-- [ ] Define Hypothesis
-- [ ] Define Task
-- [ ] Implement investigation history
-
-## Phase 2 — Coordinator
-
-- [ ] Coordinator state input
-- [ ] Next-investigation selection
-- [ ] Specialist selection
-- [ ] Investigation objective generation
-- [ ] Priority/reason generation
-- [ ] Stop/continue decision
-
-## Phase 3 — First Specialist
-
-- [ ] BaseAgent
-- [ ] StaticAgent
-- [ ] Specialist reasoning loop
-- [ ] Structured output
-
-## Phase 4 — MCP
-
-- [ ] MCP client
-- [ ] Capability registry
-- [ ] First analysis capability
-- [ ] Structured tool result
-- [ ] Tool-call logging
-
-## Phase 5 — Feedback Loop
-
-- [ ] Evidence ingestion
-- [ ] State update
-- [ ] Hypothesis update
-- [ ] Coordinator re-evaluation
-- [ ] Next-step selection
-
-## Phase 6 — Additional Specialists
-
-- [ ] DynamicAgent
-- [ ] ForensicsAgent
-- [ ] Specialist-specific capabilities
-
-## Phase 7 — Evaluation
-
-- [ ] Fixed pipeline baseline
-- [ ] Single-agent baseline
-- [ ] Investigation traces
-- [ ] Adaptivity metrics
-- [ ] Efficiency metrics
-- [ ] Evidence/hypothesis evaluation
-
----
-
-# 23. Final Target
-
-MIRA should behave like an autonomous malware investigation team:
-
-```text
-                    +-------------+
-                    ¦   Malware   ¦
-                    +-------------+
-                           ?
-                    +-------------+
-                    ¦    MIRA     ¦
-                    +-------------+
-                           ?
-                 Investigate ? Observe
-                           ?
-                   Update Evidence
-                           ?
-                  Update Hypotheses
-                           ?
-                 Decide What's Next
-                           ?
-                    Investigate
-                           ?
-                         ...
-```
-
-The goal is **not** to execute every available analysis.
-
-The goal is to perform the **most useful next investigation based on the current evidence and hypotheses**.
+</div>

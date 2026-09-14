@@ -1,0 +1,6 @@
+[submodule "rules/capa"]
+	path = rules/capa
+	url = https://github.com/mandiant/capa-rules.git
+[submodule "rules/signature-base"]
+	path = rules/signature-base
+	url = https://github.com/Neo23x0/signature-base.git
