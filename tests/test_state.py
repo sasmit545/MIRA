@@ -2,13 +2,13 @@
 
 from mira.reasoning.contracts.objective import Objective
 from mira.reasoning.contracts.state import State
-from mira.reasoning.contracts.finding import Finding
+from mira.reasoning.contracts.finding import Confidence, Finding, Severity
 from mira.reasoning.contracts.tool import ToolCall, ToolResult
 
 
 def test_state_initialization():
     obj = Objective(description="Test objective")
-    state = State(objective=obj)
+    state = State(objective=obj, run_id="sample_test_objective")
     assert state.objective == obj
     assert state.turn_count == 0
     assert state.tool_call_count == 0
@@ -16,12 +16,12 @@ def test_state_initialization():
     assert state.evidence == []
     assert state.observations == []
     assert state.scratch == {}
-    assert state.run_id == "run_" + str(hash(obj.description))
+    assert state.run_id == "sample_test_objective"
 
 
 def test_record_tool_call_and_result():
     obj = Objective(description="Test objective")
-    state = State(objective=obj)
+    state = State(objective=obj, run_id="test_run")
     tool_call = ToolCall(tool_call_id="1", name="test_tool", arguments={})
     state.record_tool_call(tool_call)
     assert state.tool_call_count == 1
@@ -36,8 +36,8 @@ def test_record_tool_call_and_result():
 
 def test_add_finding_and_evidence():
     obj = Objective(description="Test objective")
-    state = State(objective=obj)
-    finding = Finding(title="Test", description="Test", severity="info", confidence="low", evidence_refs=[], source_location="test")
+    state = State(objective=obj, run_id="test_run")
+    finding = Finding(title="Test", description="Test", severity=Severity.INFO, confidence=Confidence.LOW, evidence_refs=[], source_location="test")
     state.add_finding(finding)
     assert state.findings == [finding]
 
@@ -48,7 +48,7 @@ def test_add_finding_and_evidence():
 
 def test_snapshot():
     obj = Objective(description="Test objective")
-    state = State(objective=obj)
+    state = State(objective=obj, run_id="test_run")
     snap = state.snapshot()
     assert snap['objective'] == obj.description
     assert snap['turn_count'] == 0

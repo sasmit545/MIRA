@@ -7,6 +7,7 @@ forensic wiring each live beside their own specialist.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from .model.adapter import ModelAdapter
@@ -30,6 +31,17 @@ def load_env(path: Path = Path(".env")) -> None:
             continue
         name, _, value = line.partition("=")
         os.environ.setdefault(name.strip(), value.strip().strip("\"'"))
+
+
+def build_run_id(artifact_id: str, objective: str) -> str:
+    """Name one run, from its inputs alone.
+
+    Stable across processes, and distinct per objective so two objectives on
+    one artifact don't overwrite each other's trace. Slugified because this
+    value becomes a filename.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "_", objective.lower()).strip("_")
+    return f"{artifact_id}_{slug}"
 
 
 def build_tracer(run_id: str, trace_dir: Path) -> Tracer:

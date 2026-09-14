@@ -9,6 +9,7 @@ from typing import Any, List, Optional
 
 from openai import OpenAI
 
+from ..contracts.finding import Confidence, Severity
 from ..contracts.model import ModelResponse
 from ..contracts.tool import ToolCall
 
@@ -134,15 +135,47 @@ def declarations(tools: List[Any]) -> list[dict]:
                         "items": {
                             "type": "object",
                             "properties": {
-                                "title": {"type": "string"},
-                                "description": {"type": "string"},
-                                "severity": {"type": "string"},
-                                "confidence": {"type": "string"},
+                                "title": {"type": "string", "description": "One line naming the finding."},
+                                "description": {"type": "string", "description": "What was found and why it matters."},
+                                "severity": {
+                                    "type": "string",
+                                    "enum": [member.value for member in Severity],
+                                    "description": "How serious this finding is.",
+                                },
+                                "confidence": {
+                                    "type": "string",
+                                    "enum": [member.value for member in Confidence],
+                                    "description": "How sure you are of this finding.",
+                                },
+                                "evidence_refs": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": (
+                                        "Identifiers of the gathered evidence supporting this "
+                                        "finding, as listed in the context (E1, E2, ...)."
+                                    ),
+                                },
+                                "source_location": {
+                                    "type": "string",
+                                    "description": "Where in the artifact this was found, if known.",
+                                },
                             },
+                            "required": [
+                                "title",
+                                "description",
+                                "severity",
+                                "confidence",
+                                "evidence_refs",
+                            ],
                         },
                     },
+                    "recommended_actions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "What the investigation should do next.",
+                    },
                 },
-                "required": ["summary", "verdict"],
+                "required": ["summary", "verdict", "findings"],
             },
         }
     )
