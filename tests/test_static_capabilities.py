@@ -1,7 +1,9 @@
-import struct
+import json
 import tempfile
 import unittest
 from pathlib import Path
+
+from support import build_minimal_pe
 
 from mira.core.artifact import ArtifactStore, detect_file_type
 from mira.capabilities.static.entropy_analyzer import calculate_entropy
@@ -259,23 +261,6 @@ class AsyncServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["error"]["code"], "INVALID_INPUT")
 
 
-def build_minimal_pe() -> bytes:
-    """A real enough PE32 that pefile parses it and PE capabilities run."""
-    dos = b"MZ" + b"\x00" * 58 + struct.pack("<I", 0x40)
-    coff = struct.pack("<HHIIIHH", 0x14C, 1, 0, 0, 0, 0xE0, 0x102)
-    optional = struct.pack("<HBBIIIII", 0x10B, 1, 0, 0x200, 0, 0, 0x1000, 0x1000)
-    optional += struct.pack("<II", 0x400000, 0x1000)
-    optional += struct.pack("<I", 0x200) + b"\x00" * (0xE0 - len(optional) - 4)
-    section = (
-        b".text\x00\x00\x00"
-        + struct.pack("<IIII", 0x200, 0x1000, 0x200, 0x400)
-        + b"\x00" * 12
-        + struct.pack("<I", 0x60000020)
-    )
-    head = dos + b"PE\x00\x00" + coff + optional + section
-    return head + b"\x00" * (0x400 - len(head)) + b"\x90" * 0x200
-
-
 class ContractConformanceTests(unittest.IsolatedAsyncioTestCase):
     """Handlers must satisfy the output contracts the server advertises.
 
@@ -321,3 +306,35 @@ class ContractConformanceTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LargeResultTests(unittest.IsolatedAsyncioTestCase):
+    """A result bigger than the worker pipe's buffer must still come back.
+
+    multiprocessing.Queue is backed by a pipe with a finite OS buffer. A child
+    putting more than fits blocks in its feeder thread until the parent drains
+    it, so a parent that joins before reading waits out the whole timeout and
+    reports a perfectly healthy analysis as a timeout. That silently capped
+    every paginated capability at a page the buffer happened to fit.
+    """
+
+    async def test_a_page_larger_than_the_pipe_buffer_is_returned(self):
+        bulk = b"".join(
+            f"https://command-and-control-{n:04}.example.invalid/beacon\x00".encode()
+            for n in range(2000)
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.exe"
+            artifact_path.write_bytes(build_minimal_pe() + bulk)
+            store = ArtifactStore(temporary_directory)
+            store.register("bulk", artifact_path)
+            # Short timeout: a regression should fail fast, not wait minutes.
+            server = StaticMCPServer(store, limits=AnalysisLimits(timeout_seconds=20))
+
+            result = await server.call(
+                "extract_strings", {"artifact_id": "bulk", "limit": 1000, "min_length": 4}
+            )
+
+        self.assertEqual(result["status"], "ok", result.get("error"))
+        self.assertEqual(len(result["data"]["strings"]), 1000)
+        self.assertGreater(len(json.dumps(result).encode()), 64 * 1024)

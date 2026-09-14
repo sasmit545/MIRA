@@ -61,15 +61,29 @@ def run_isolated(job: AnalysisJob, limits: AnalysisLimits) -> ExecutionResult:
         output.close()
         output.join_thread()
         return ExecutionResult("resource_limit", message=str(error))
-    process.join(limits.timeout_seconds)
-    if process.is_alive():
-        process.terminate()
-        process.join()
-        return ExecutionResult("timeout", message="analysis exceeded the configured timeout")
     try:
-        response = output.get(timeout=0.2)
-    except Empty:
-        return ExecutionResult("resource_limit" if process.exitcode else "failed", message="analysis worker exited without a result")
+        # Read before joining. The queue is a pipe with a finite OS buffer: a
+        # worker putting more than fits blocks in its feeder thread until this
+        # process drains it, and cannot exit while it does. Joining first
+        # therefore waits out the whole timeout and reports a healthy analysis
+        # as a timeout - which silently capped every paginated capability at
+        # whatever page the buffer happened to fit.
+        try:
+            response = output.get(timeout=limits.timeout_seconds)
+        except Empty:
+            if process.is_alive():
+                process.terminate()
+                process.join()
+                return ExecutionResult("timeout", message="analysis exceeded the configured timeout")
+            return ExecutionResult(
+                "resource_limit" if process.exitcode else "failed",
+                message="analysis worker exited without a result",
+            )
+        # Draining unblocked the worker, so this returns promptly.
+        process.join(limits.timeout_seconds)
+        if process.is_alive():
+            process.terminate()
+            process.join()
     finally:
         output.close()
         output.join_thread()
