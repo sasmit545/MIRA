@@ -4,7 +4,9 @@ import unittest
 from pathlib import Path
 
 from mira.core.artifact import ArtifactStore, detect_file_type
+from mira.capabilities.static.entropy_analyzer import calculate_entropy
 from mira.capabilities.static.file_info import analyze_file_info
+from mira.capabilities.static.pe_analyzer import analyze_pe
 from mira.capabilities.static.string_analyzer import extract_strings
 from mira.mcp.client import StaticMCPClient
 from mira.mcp.isolation import AnalysisLimits, ExecutionResult
@@ -40,6 +42,178 @@ class FileInfoTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(len(result["data"]["strings"]), 2)
         self.assertTrue(result["metadata"]["has_more"])
+
+
+class PESupportTests(unittest.TestCase):
+    def test_a_pe_handler_does_not_hold_the_sample_open(self):
+        # pefile.PE(name=path) used to mmap the file and never release it,
+        # which on Windows blocks deleting/moving the sample until the
+        # process exits. A direct, non-isolated call is the reproduction:
+        # the isolated worker masked this because its subprocess always
+        # exits (and releases the handle) before the tempdir is cleaned up.
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.exe"
+            artifact_path.write_bytes(build_minimal_pe())
+            artifact = ArtifactStore(temporary_directory).register("pe-leak", artifact_path)
+
+            result = analyze_pe(artifact)
+
+        self.assertEqual(result["status"], "ok")
+
+
+class EntropyTests(unittest.TestCase):
+    def test_chunk_size_splits_the_region_into_windows(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.bin"
+            artifact_path.write_bytes(b"\x00" * 8 + bytes(range(256)) * 2)
+            artifact = ArtifactStore(temporary_directory).register("sample-3", artifact_path)
+
+            result = calculate_entropy(artifact, offset=0, length=8 + 512, chunk_size=8)
+
+        self.assertEqual(result["status"], "ok")
+        chunks = result["data"]["chunks"]
+        self.assertEqual(len(chunks), 65)
+        self.assertEqual(chunks[0]["entropy"], 0.0)
+        self.assertGreater(chunks[-1]["entropy"], 0.0)
+        self.assertEqual(sum(chunk["length"] for chunk in chunks), 8 + 512)
+
+    def test_chunk_size_without_a_region_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.bin"
+            artifact_path.write_bytes(b"data")
+            artifact = ArtifactStore(temporary_directory).register("sample-4", artifact_path)
+
+            result = calculate_entropy(artifact, chunk_size=4)
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error"]["code"], "INVALID_INPUT")
+
+
+class DisassemblerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_offset_pages_past_the_first_batch(self):
+        # Goes through the isolated worker, like ContractConformanceTests: PE
+        # handlers never close their pefile.PE, so a direct in-process call
+        # would leave the sample locked on Windows until the process exits.
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.exe"
+            artifact_path.write_bytes(build_minimal_pe())
+            store = ArtifactStore(temporary_directory)
+            store.register("pe-disasm", artifact_path)
+            server = StaticMCPServer(store)
+
+            first = await server.call("disassemble_function", {"artifact_id": "pe-disasm", "function_address": 0x2000, "limit": 5})
+            second = await server.call("disassemble_function", {"artifact_id": "pe-disasm", "function_address": 0x2000, "limit": 5, "offset": 5})
+
+        self.assertEqual(first["status"], "ok")
+        self.assertEqual(second["status"], "ok")
+        first_addresses = [instruction["address"] for instruction in first["data"]["instructions"]]
+        second_addresses = [instruction["address"] for instruction in second["data"]["instructions"]]
+        self.assertEqual(len(first_addresses), 5)
+        self.assertEqual(len(second_addresses), 5)
+        self.assertTrue(set(first_addresses).isdisjoint(second_addresses))
+        self.assertTrue(first["metadata"]["has_more"])
+
+
+class YaraScannerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_limit_and_offset_page_across_matching_rules(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.exe"
+            artifact_path.write_bytes(build_minimal_pe())
+            store = ArtifactStore(temporary_directory)
+            store.register("pe-yara", artifact_path)
+
+            rules_path = Path(temporary_directory) / "rules.yar"
+            rules_path.write_text("\n".join(f"rule r{i} {{ condition: uint16(0) == 0x5A4D }}" for i in range(3)))
+            server = StaticMCPServer(store, rulesets={"test": rules_path})
+
+            first = await server.call("scan_yara", {"artifact_id": "pe-yara", "ruleset": "test", "limit": 2})
+            second = await server.call("scan_yara", {"artifact_id": "pe-yara", "ruleset": "test", "limit": 2, "offset": 2})
+
+        self.assertEqual(first["status"], "ok")
+        self.assertEqual(len(first["data"]["matches"]), 2)
+        self.assertTrue(first["metadata"]["has_more"])
+        self.assertEqual(second["status"], "ok")
+        self.assertEqual(len(second["data"]["matches"]), 1)
+        self.assertFalse(second["metadata"]["has_more"])
+
+
+class CapaAnalyzerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tool_not_available_without_a_configured_rules_directory(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.exe"
+            artifact_path.write_bytes(build_minimal_pe())
+            store = ArtifactStore(temporary_directory)
+            store.register("pe-capa", artifact_path)
+            server = StaticMCPServer(store)
+
+            result = await server.call("run_capa", {"artifact_id": "pe-capa"})
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error"]["code"], "TOOL_NOT_AVAILABLE")
+
+    async def test_matches_a_configured_rule_against_the_sample(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.exe"
+            artifact_path.write_bytes(build_minimal_pe() + b"MIRA-TEST-MARKER\x00")
+            store = ArtifactStore(temporary_directory)
+            store.register("pe-capa", artifact_path)
+
+            rules_dir = Path(temporary_directory) / "rules"
+            rules_dir.mkdir()
+            (rules_dir / "marker.yml").write_text(
+                "rule:\n"
+                "  meta:\n"
+                "    name: contains marker string\n"
+                "    namespace: example\n"
+                "    authors: [test@example.com]\n"
+                "    scopes: {static: file, dynamic: file}\n"
+                "    examples: ['0000000000000000000000000000000000000000000000000000000000000000:0x0']\n"
+                "  features:\n"
+                '    - string: "MIRA-TEST-MARKER"\n'
+            )
+            server = StaticMCPServer(store, capa_rules_dir=rules_dir)
+
+            result = await server.call("run_capa", {"artifact_id": "pe-capa"})
+
+        self.assertEqual(result["status"], "ok")
+        findings = result["data"]["findings"]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["rule_id"], "contains marker string")
+        self.assertEqual(findings[0]["namespace"], "example")
+
+
+class CapaResourceTests(unittest.TestCase):
+    def test_does_not_hold_the_sample_open_after_returning(self):
+        # capa's vivisect backend (vivisect/parsers/pe.py) opens the sample
+        # with a plain open() and never closes it - not our code, so a direct
+        # call is the reproduction the same way PESupportTests's is: the
+        # isolated worker masks it because its subprocess always exits before
+        # the tempdir is cleaned up.
+        from mira.capabilities.static.capa_analyzer import run_capa
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.exe"
+            artifact_path.write_bytes(build_minimal_pe())
+            artifact = ArtifactStore(temporary_directory).register("pe-capa-leak", artifact_path)
+
+            rules_dir = Path(temporary_directory) / "rules"
+            rules_dir.mkdir()
+            (rules_dir / "marker.yml").write_text(
+                "rule:\n"
+                "  meta:\n"
+                "    name: always\n"
+                "    namespace: example\n"
+                "    authors: [test@example.com]\n"
+                "    scopes: {static: file, dynamic: file}\n"
+                "    examples: ['0000000000000000000000000000000000000000000000000000000000000000:0x0']\n"
+                "  features:\n"
+                "    - string: \"MZ\"\n"
+            )
+
+            result = run_capa(artifact, rules_dir=rules_dir)
+
+        self.assertEqual(result["status"], "ok")
+
 
 class AsyncServerTests(unittest.IsolatedAsyncioTestCase):
     def test_analysis_limits_reject_invalid_configuration(self):

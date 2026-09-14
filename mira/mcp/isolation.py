@@ -36,6 +36,7 @@ class AnalysisJob:
     artifact: Artifact
     parameters: dict[str, Any]
     rulesets: dict[str, Path]
+    capa_rules_dir: Path | None
     #: Dotted path to the specialist module whose `invoke(job)` runs this.
     #: A string rather than a callable so it crosses the spawn boundary and
     #: is imported in the child, keeping analysis libraries out of the parent.

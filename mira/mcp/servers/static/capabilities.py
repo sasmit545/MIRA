@@ -158,4 +158,6 @@ def invoke(job: Any) -> dict:
     }
     if job.capability == "scan_yara":
         return handlers[job.capability](job.artifact, rulesets=job.rulesets, **job.parameters)
+    if job.capability == "run_capa":
+        return handlers[job.capability](job.artifact, rules_dir=job.capa_rules_dir, **job.parameters)
     return handlers[job.capability](job.artifact, **job.parameters)

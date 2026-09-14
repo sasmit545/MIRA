@@ -21,11 +21,13 @@ class StaticMCPServer:
         artifact_store: ArtifactStore,
         *,
         rulesets: dict[str, Path] | None = None,
+        capa_rules_dir: Path | None = None,
         limits: AnalysisLimits | None = None,
         runner: Callable[[AnalysisJob, AnalysisLimits], ExecutionResult] = run_isolated,
     ):
         self.artifact_store = artifact_store
         self.rulesets = rulesets or {}
+        self.capa_rules_dir = capa_rules_dir
         self.limits = limits or AnalysisLimits()
         self._runner = runner
         self._semaphore = asyncio.Semaphore(self.limits.max_concurrent)
@@ -47,7 +49,7 @@ class StaticMCPServer:
         artifact, parameters, error = self._validate(capability, payload)
         if error:
             return error
-        job = AnalysisJob(capability, artifact, parameters, self.rulesets, DISPATCH)
+        job = AnalysisJob(capability, artifact, parameters, self.rulesets, self.capa_rules_dir, DISPATCH)
         async with self._semaphore:
             execution = await asyncio.to_thread(self._runner, job, self.limits)
         if execution.status == "ok":
