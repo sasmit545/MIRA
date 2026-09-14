@@ -43,6 +43,7 @@ class ModelAdapter:
             max_tokens=MAX_TOKENS,
         )
 
+        usage = _usage(response.usage)
         message = response.choices[0].message
         calls: list[ToolCall] = []
         for call in message.tool_calls or []:
@@ -50,7 +51,7 @@ class ModelAdapter:
             if call.function.name == REPORT_TOOL:
                 # The report rides the existing report path; findings default to
                 # empty so a terse submission still satisfies the output contract.
-                return ModelResponse(report=json.dumps({"findings": [], **arguments}))
+                return ModelResponse(report=json.dumps({"findings": [], **arguments}), usage=usage)
             calls.append(
                 ToolCall(
                     tool_call_id=call.id,
@@ -60,12 +61,14 @@ class ModelAdapter:
             )
 
         if calls:
-            return ModelResponse(tool_calls=calls)
+            return ModelResponse(tool_calls=calls, usage=usage)
 
         # No tool call: fall back to a JSON report in plain text. Text the model
         # spoke but we cannot use IS a real empty response — it can recover next
         # turn — unlike an API failure, which raises above.
-        return _from_text(message.content or "")
+        result = _from_text(message.content or "")
+        result.usage = usage
+        return result
 
 
 # Supplied by the runtime, never by the model. artifact_id in particular is
@@ -144,6 +147,17 @@ def declarations(tools: List[Any]) -> list[dict]:
         }
     )
     return [{"type": "function", "function": function} for function in declared]
+
+
+def _usage(usage: Any) -> Optional[dict]:
+    """The provider's per-call token accounting, when it sends one."""
+    if usage is None:
+        return None
+    return {
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "total_tokens": usage.total_tokens,
+    }
 
 
 def _arguments(raw: str | None) -> dict:

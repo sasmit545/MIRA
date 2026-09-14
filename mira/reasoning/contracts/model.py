@@ -10,6 +10,7 @@ class ModelResponse:
     """Response from the model, which can be tool calls, a report, or empty."""
     tool_calls: Optional[List[ToolCall]] = None
     report: Optional[str] = None
+    usage: Optional[dict] = None  # {"prompt_tokens", "completion_tokens", "total_tokens"}, when the provider reports it
 
     def __post_init__(self):
         if self.tool_calls is not None and self.report is not None:

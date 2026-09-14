@@ -56,6 +56,7 @@ class AgentLoop:
                 context=context_str,
                 tools=available_tools,
             )
+            state.record_usage(response.usage)
 
             if response.report is not None:
                 self.completion.record_non_empty_response()
@@ -64,13 +65,13 @@ class AgentLoop:
                     return report
                 # Validation failure is an observation the model can recover from.
                 self._record_report_failure(state, response.report, failure)
-                self.tracer.turn(context_str, response, [], [], state.snapshot())
+                self.tracer.turn(context_str, response, [], [], state.snapshot(), token_usage=response.usage)
                 state.turn_count += 1
                 continue
 
             if not response.tool_calls:
                 self.completion.record_empty_response()
-                self.tracer.turn(context_str, response, [], [], state.snapshot())
+                self.tracer.turn(context_str, response, [], [], state.snapshot(), token_usage=response.usage)
                 state.turn_count += 1
                 continue
 
@@ -85,7 +86,7 @@ class AgentLoop:
                 calls.append(tool_call)
                 results.append(tool_result)
 
-            self.tracer.turn(context_str, response, calls, results, state.snapshot())
+            self.tracer.turn(context_str, response, calls, results, state.snapshot(), token_usage=response.usage)
             state.turn_count += 1
 
         return FinalOutput(
@@ -161,6 +162,9 @@ class AgentLoop:
             "run_id": state.run_id,
             "turns": state.turn_count,
             "tool_calls": state.tool_call_count,
+            "prompt_tokens": state.total_prompt_tokens,
+            "completion_tokens": state.total_completion_tokens,
+            "total_tokens": state.total_tokens,
         }
 
     def _completion_reason(self, state: State, agent_def: AgentDefinition) -> str:

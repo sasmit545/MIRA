@@ -90,6 +90,7 @@ def main() -> None:
     print(f"reason:    {output.completion_reason}")
     print(f"summary:   {output.summary}")
     print(f"findings:  {len(output.findings)}")
+    print(f"tokens:    {output.metadata['total_tokens']} ({output.metadata['prompt_tokens']} prompt + {output.metadata['completion_tokens']} completion)")
     print(f"metadata:  {output.metadata}")
 
 

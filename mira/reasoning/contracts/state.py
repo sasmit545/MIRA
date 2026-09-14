@@ -13,6 +13,9 @@ class State:
     objective: Objective
     turn_count: int = 0
     tool_call_count: int = 0
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    total_tokens: int = 0
     findings: List[Finding] = field(default_factory=list)
     evidence: List[Any] = field(default_factory=list)  # Curated subset of observations
     observations: List[Dict[str, Any]] = field(default_factory=list)  # Each observation: {'call': ToolCall, 'result': ToolResult}
@@ -21,6 +24,13 @@ class State:
 
     def __post_init__(self) -> None:
         self.run_id = "run_" + str(hash(self.objective.description))
+
+    def record_usage(self, usage: Optional[Dict[str, int]]) -> None:
+        if usage is None:
+            return
+        self.total_prompt_tokens += usage.get("prompt_tokens", 0)
+        self.total_completion_tokens += usage.get("completion_tokens", 0)
+        self.total_tokens += usage.get("total_tokens", 0)
 
     def record_tool_call(self, tool_call: ToolCall) -> None:
         self.tool_call_count += 1
@@ -52,4 +62,5 @@ class State:
             'observations_count': len(self.observations),
             'scratch': self.scratch.copy(),
             'run_id': self.run_id,
+            'total_tokens': self.total_tokens,
         }
