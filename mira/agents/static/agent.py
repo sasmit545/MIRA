@@ -19,6 +19,7 @@ from mira.contracts.requests import CapabilityRequest
 from mira.contracts.results import CapabilityResult
 from mira.core.evidence import Evidence
 from mira.core.objective import InvestigationObjective
+from mira.core.state import InvestigationState
 from mira.mcp.client import StaticMCPClient
 from mira.reasoning.composition import (
     DEFAULT_MAX_TOOL_CALLS,
@@ -78,12 +79,19 @@ class StaticAgent:
         return await self._client.invoke_request(request)
 
     async def investigate(
-        self, objective: InvestigationObjective, artifact_id: str
+        self,
+        objective: InvestigationObjective,
+        artifact_id: str,
+        state: InvestigationState | None = None,
     ) -> InvestigationFinding:
         """Pursue one objective, letting the model choose within its capabilities.
 
         Only the objective's capabilities reach the runtime, so a capability
         the Coordinator did not authorize is refused rather than executed.
+
+        `state`, when given, is the shared investigation state this run
+        deposits its evidence into. Without one the run behaves exactly as
+        before, which is what the CLI path wants.
         """
         results: dict[str, dict] = {}
         evidence: list[Evidence] = []
@@ -93,6 +101,10 @@ class StaticAgent:
         # it is where evidence identifiers are minted (KTD1) and where an
         # observation's position in the trace is known.
         position = count()
+        # Numbering continues past whatever the shared state already holds:
+        # two runs both minting "E1" would leave their findings citing an
+        # identifier the orchestrator cannot resolve to one observation.
+        minted = len(state.evidence) if state is not None else 0
 
         async def execute(capability: str, arguments: dict):
             result = await invoke(capability, arguments)
@@ -100,17 +112,19 @@ class StaticAgent:
             # `results` is deliberately read before this result joins it: a
             # normalizer's `prior` is what earlier capabilities reported.
             for signal in normalize(capability, result, results):
-                evidence.append(
-                    Evidence(
-                        id=f"E{len(evidence) + 1}",
-                        observation=signal.observation,
-                        source_agent=SOURCE_AGENT,
-                        capability=capability,
-                        artifact_id=artifact_id,
-                        confidence=signal.confidence,
-                        provenance=provenance,
-                    )
+                item = Evidence(
+                    id=f"E{minted + len(evidence) + 1}",
+                    observation=signal.observation,
+                    source_agent=SOURCE_AGENT,
+                    capability=capability,
+                    artifact_id=artifact_id,
+                    confidence=signal.confidence,
+                    provenance=provenance,
                 )
+                evidence.append(item)
+                if state is not None:
+                    # add_evidence already logs the change into its history.
+                    state.add_evidence(item)
             results[capability] = result
             return result
 

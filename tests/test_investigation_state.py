@@ -11,7 +11,11 @@ from mira.core.artifact import Artifact
 from mira.core.evidence import Evidence
 from mira.core.hypothesis import Hypothesis
 from mira.core.state import InvestigationState
+from mira.core.objective import InvestigationObjective
 from mira.core.task import InvestigationTask
+from mira.agents.static.agent import StaticAgent
+from mira.reasoning.contracts.model import ModelResponse
+from mira.reasoning.contracts.tool import ToolCall
 
 
 def build_state() -> InvestigationState:
@@ -147,3 +151,90 @@ def test_contradicting_evidence_weakens_a_hypothesis():
     assert hypothesis.contradicting_evidence == ["E2"]
     assert hypothesis.confidence == 0.3
     assert hypothesis.status == "weakened"
+
+
+# --- The specialist's first inbound edge into the shared state --------------
+
+PACKED = {
+    "status": "ok",
+    "data": {"packed": True, "packer": "UPX", "confidence": 0.9, "indicators": ["UPX0"]},
+    "metadata": {},
+}
+REPORT = '{"summary": "done", "verdict": "suspicious", "findings": []}'
+
+
+class ScriptedClient:
+    async def invoke(self, capability, artifact_id, **payload):
+        return PACKED
+
+
+class ToolThenReportModel:
+    def __init__(self):
+        self.pending = ["detect_packer"]
+
+    def generate(self, context, tools):
+        if self.pending:
+            name = self.pending.pop(0)
+            return ModelResponse(tool_calls=[ToolCall(tool_call_id=name, name=name, arguments={})])
+        return ModelResponse(report=REPORT)
+
+
+def objective(name: str) -> InvestigationObjective:
+    return InvestigationObjective(
+        name=name, description=f"{name}.", reason="test", capabilities=("detect_packer",)
+    )
+
+
+async def investigate(tmp_path, name, state=None):
+    agent = StaticAgent(ScriptedClient(), model=ToolThenReportModel(), trace_dir=tmp_path)
+    return await agent.investigate(objective(name), "sample-1", state=state)
+
+
+async def test_a_run_deposits_its_evidence_into_the_shared_state(tmp_path):
+    state = InvestigationState()
+
+    finding = await investigate(tmp_path, "Assess packing", state)
+
+    assert len(state.evidence) == len(finding.evidence) == 1
+    for evidence in finding.evidence:
+        assert state.get_evidence_by_id(evidence.id) is evidence
+
+
+async def test_two_objectives_accumulate_rather_than_replace(tmp_path):
+    state = InvestigationState()
+
+    await investigate(tmp_path, "Assess packing", state)
+    await investigate(tmp_path, "Assess capability", state)
+
+    assert len(state.evidence) == 2
+    assert {evidence.capability for evidence in state.evidence} == {"detect_packer"}
+
+
+async def test_identifiers_stay_unique_across_runs_sharing_one_state(tmp_path):
+    """Two findings citing 'E1' from different runs would be unresolvable."""
+    state = InvestigationState()
+
+    await investigate(tmp_path, "Assess packing", state)
+    await investigate(tmp_path, "Assess capability", state)
+
+    identifiers = [evidence.id for evidence in state.evidence]
+    assert identifiers == sorted(set(identifiers), key=identifiers.index)
+    assert len(set(identifiers)) == 2
+
+
+async def test_a_run_given_no_state_is_unaffected(tmp_path):
+    """The CLI path supplies no shared state and must behave as before."""
+    finding = await investigate(tmp_path, "Assess packing")
+
+    assert len(finding.evidence) == 1
+    assert finding.evidence[0].id == "E1"
+
+
+async def test_the_deposit_is_logged_once_in_the_state_history(tmp_path):
+    """add_evidence already logs; the specialist must not log in parallel."""
+    state = InvestigationState()
+
+    await investigate(tmp_path, "Assess packing", state)
+
+    added = [entry for entry in state.history if entry["change_type"] == "evidence_added"]
+    assert len(added) == 1
