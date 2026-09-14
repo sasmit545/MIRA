@@ -1,5 +1,9 @@
 """Tests for AgentLoop."""
 
+import json
+
+from mira.core.evidence import Evidence
+from mira.reasoning.contracts.finding import Confidence, Finding, Severity
 from mira.reasoning.contracts.model import ModelResponse
 from mira.reasoning.contracts.objective import Objective
 from mira.reasoning.contracts.output import FinalOutput
@@ -12,6 +16,36 @@ from mira.reasoning.runtime.tool_runtime import ToolRuntime
 from mira.reasoning.runtime.trace import Tracer
 
 REPORT = '{"summary": "test", "verdict": "test", "findings": []}'
+
+FINDING = {
+    "title": "Packed executable",
+    "description": "The sample's .text section is packed.",
+    "severity": "high",
+    "confidence": "medium",
+    "evidence_refs": ["E1"],
+}
+
+
+def report(finding=None, **fields):
+    """A submitted report carrying one finding, with fields overridden."""
+    body = {"summary": "test", "verdict": "suspicious", **fields}
+    if finding is not None:
+        body["findings"] = [finding]
+    return json.dumps(body)
+
+
+def gathered(*ids):
+    """Evidence the specialist minted before the model reported."""
+    return [
+        Evidence(
+            id=identifier,
+            observation=f"observation behind {identifier}",
+            source_agent="static",
+            capability="detect_packer",
+            confidence=0.9,
+        )
+        for identifier in ids
+    ]
 
 
 class ScriptedModel:
@@ -144,3 +178,113 @@ async def test_a_broken_on_turn_callback_does_not_break_the_loop(tmp_path):
     result = await loop.run(Objective(description="Test objective"), build_definition())
 
     assert result.completion_reason == "reported"
+
+
+# --- Findings are typed values, not passthrough model JSON ------------------
+
+
+async def run_with_evidence(tmp_path, submitted, *evidence_ids):
+    """Run one turn where the model submits `submitted` against known evidence."""
+    loop = build_loop(ScriptedModel(ModelResponse(report=submitted)), tmp_path)
+    return await loop.run(
+        Objective(description="Test objective"),
+        build_definition(),
+        evidence=gathered(*evidence_ids),
+    )
+
+
+async def test_a_valid_finding_becomes_a_typed_finding(tmp_path):
+    result = await run_with_evidence(tmp_path, report(FINDING), "E1")
+
+    assert result.completion_reason == "reported"
+    finding = result.findings[0]
+    assert isinstance(finding, Finding)
+    assert finding.severity is Severity.HIGH
+    assert finding.confidence is Confidence.MEDIUM
+    assert [ref.evidence_id for ref in finding.evidence_refs] == ["E1"]
+
+
+async def test_no_raw_dictionary_survives_into_the_findings(tmp_path):
+    result = await run_with_evidence(tmp_path, report(FINDING), "E1")
+
+    assert all(isinstance(finding, Finding) for finding in result.findings)
+
+
+async def test_an_unrecognized_severity_is_rejected_and_reaches_the_model(tmp_path):
+    """Rejection is an observation the model can recover from, not an exception."""
+    submitted = report({**FINDING, "severity": "catastrophic"})
+    model = ScriptedModel(ModelResponse(report=submitted), ModelResponse(report=REPORT))
+    loop = build_loop(model, tmp_path)
+
+    result = await loop.run(
+        Objective(description="Test objective"), build_definition(), evidence=gathered("E1")
+    )
+
+    assert result.completion_reason == "reported"
+    rejection = next(item for item in result.evidence if not item.success)
+    assert "severity" in rejection.error
+    assert "catastrophic" in rejection.error
+
+
+async def test_a_finding_naming_unknown_evidence_is_rejected(tmp_path):
+    result = await run_with_evidence(
+        tmp_path, report({**FINDING, "evidence_refs": ["E9"]}), "E1"
+    )
+
+    assert result.completion_reason != "reported"
+    assert any("E9" in (item.error or "") for item in result.evidence)
+
+
+async def test_a_finding_missing_its_title_is_rejected(tmp_path):
+    submitted = report({key: value for key, value in FINDING.items() if key != "title"})
+
+    result = await run_with_evidence(tmp_path, submitted, "E1")
+
+    assert result.completion_reason != "reported"
+    assert any("title" in (item.error or "") for item in result.evidence)
+
+
+async def test_a_finding_citing_no_evidence_is_rejected_when_evidence_exists(tmp_path):
+    """A finding the orchestrator cannot check back to an observation is not
+    a finding it can act on."""
+    result = await run_with_evidence(tmp_path, report({**FINDING, "evidence_refs": []}), "E1")
+
+    assert result.completion_reason != "reported"
+    assert any("evidence_refs" in (item.error or "") for item in result.evidence)
+
+
+async def test_a_finding_citing_no_evidence_is_accepted_when_none_was_gathered(tmp_path):
+    """Nothing to cite must not deadlock the model into endless rejection."""
+    result = await run_with_evidence(tmp_path, report({**FINDING, "evidence_refs": []}))
+
+    assert result.completion_reason == "reported"
+    assert result.findings[0].evidence_refs == []
+
+
+async def test_a_malformed_report_then_a_valid_one_completes_as_reported(tmp_path):
+    model = ScriptedModel(
+        ModelResponse(report=report({**FINDING, "confidence": "very sure"})),
+        ModelResponse(report=report(FINDING)),
+    )
+    loop = build_loop(model, tmp_path)
+
+    result = await loop.run(
+        Objective(description="Test objective"), build_definition(), evidence=gathered("E1")
+    )
+
+    assert result.completion_reason == "reported"
+    assert result.findings[0].confidence is Confidence.MEDIUM
+
+
+async def test_recommended_actions_ride_the_report(tmp_path):
+    submitted = report(FINDING, recommended_actions=["Run the sample in a sandbox"])
+
+    result = await run_with_evidence(tmp_path, submitted, "E1")
+
+    assert result.recommended_actions == ["Run the sample in a sandbox"]
+
+
+async def test_a_report_with_no_recommended_actions_is_still_valid(tmp_path):
+    result = await run_with_evidence(tmp_path, report(FINDING), "E1")
+
+    assert result.recommended_actions == []

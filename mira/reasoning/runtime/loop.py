@@ -3,6 +3,7 @@
 import json
 from typing import Callable, List, Optional
 
+from ..contracts.finding import Confidence, Evidence, Finding, Severity
 from ..contracts.model import ModelResponse
 from ..contracts.objective import Objective
 from ..contracts.output import FinalOutput
@@ -51,11 +52,22 @@ class AgentLoop:
         self,
         objective: Objective,
         agent_def: AgentDefinition,
+        evidence: Optional[List] = None,
     ) -> FinalOutput:
-        """Run the investigation until completion. Always writes a trace."""
+        """Run the investigation until completion. Always writes a trace.
+
+        `evidence` is the specialist's own accumulator, shared rather than
+        copied: the specialist mints evidence as results arrive, and the loop
+        reads it both to show the model what it may cite and to reject a
+        finding that cites something never observed.
+        """
         # The tracer names the trace file; taking the run id from it is what
         # makes a recorded evidence reference resolvable back to that file.
-        state = State(objective=objective, run_id=self.tracer.run_id)
+        state = State(
+            objective=objective,
+            run_id=self.tracer.run_id,
+            evidence=evidence if evidence is not None else [],
+        )
         try:
             return await self._run(state, agent_def)
         finally:
@@ -154,14 +166,23 @@ class AgentLoop:
         if not isinstance(metadata, dict):
             return None, "report metadata must be an object"
 
+        findings, failure = _typed_findings(payload["findings"], state)
+        if findings is None:
+            return None, failure
+
+        actions, failure = _recommended_actions(payload.get("recommended_actions"))
+        if actions is None:
+            return None, failure
+
         return (
             agent_def.output_contract(
                 summary=payload["summary"],
                 verdict=payload["verdict"],
-                findings=payload["findings"],
+                findings=findings,
                 evidence=self._evidence(state),
                 completion_reason="reported",
                 metadata={**metadata, **self._metadata(state)},
+                recommended_actions=actions,
             ),
             "",
         )
@@ -191,3 +212,104 @@ class AgentLoop:
         if state.tool_call_count >= agent_def.max_tool_calls:
             return "limit_calls"
         return "limit_turns"
+
+
+# --- Report validation.
+# A dataclass annotation is not a check: `findings: List[Finding]` held raw
+# model dicts because nothing ever constructed a Finding. These turn the
+# submitted JSON into typed values, or into a sentence the model can act on.
+
+
+def _typed_findings(raw: object, state: State) -> tuple[Optional[List[Finding]], str]:
+    if not isinstance(raw, list):
+        return None, "findings must be an array"
+    known = {getattr(item, "id", None) for item in state.evidence}
+    known.discard(None)
+
+    typed: List[Finding] = []
+    for position, entry in enumerate(raw):
+        finding, failure = _typed_finding(entry, known, f"findings[{position}]")
+        if finding is None:
+            return None, failure
+        typed.append(finding)
+    return typed, ""
+
+
+def _typed_finding(
+    entry: object, known: set, where: str
+) -> tuple[Optional[Finding], str]:
+    if not isinstance(entry, dict):
+        return None, f"{where} must be an object"
+
+    for name in ("title", "description"):
+        value = entry.get(name)
+        if not isinstance(value, str) or not value.strip():
+            return None, f"{where}.{name} must be a non-empty string"
+
+    severity, failure = _enum_member(Severity, entry.get("severity"), f"{where}.severity")
+    if severity is None:
+        return None, failure
+
+    confidence, failure = _enum_member(Confidence, entry.get("confidence"), f"{where}.confidence")
+    if confidence is None:
+        return None, failure
+
+    refs, failure = _evidence_refs(entry.get("evidence_refs"), known, where)
+    if refs is None:
+        return None, failure
+
+    return (
+        Finding(
+            title=entry["title"],
+            description=entry["description"],
+            severity=severity,
+            confidence=confidence,
+            evidence_refs=refs,
+            source_location=entry.get("source_location") or "",
+        ),
+        "",
+    )
+
+
+def _enum_member(enum_type, raw: object, where: str):
+    options = ", ".join(member.value for member in enum_type)
+    if not isinstance(raw, str):
+        return None, f"{where} is required and must be one of: {options}"
+    try:
+        return enum_type(raw.strip().lower()), ""
+    except ValueError:
+        return None, f"{where} is {raw!r}, which is not one of: {options}"
+
+
+def _evidence_refs(
+    raw: object, known: set, where: str
+) -> tuple[Optional[List[Evidence]], str]:
+    field = f"{where}.evidence_refs"
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list) or not all(isinstance(ref, str) for ref in raw):
+        return None, f"{field} must be an array of evidence identifiers"
+
+    unknown = [ref for ref in raw if ref not in known]
+    if unknown:
+        return None, (
+            f"{field} names evidence that was never observed: {', '.join(unknown)}. "
+            f"Available: {', '.join(sorted(known)) or 'none'}"
+        )
+    if not raw and known:
+        # A finding the orchestrator cannot trace back to an observation is
+        # not one it can act on. Only excused when nothing was gathered, so a
+        # clean run does not deadlock the model in endless rejection.
+        return None, (
+            f"{field} must name at least one of the evidence identifiers "
+            f"gathered so far: {', '.join(sorted(known))}"
+        )
+    return [Evidence(evidence_id=ref) for ref in raw], ""
+
+
+def _recommended_actions(raw: object) -> tuple[Optional[List[str]], str]:
+    if raw is None:
+        return [], ""
+    if not isinstance(raw, list) or not all(isinstance(action, str) for action in raw):
+        return None, "recommended_actions must be an array of strings"
+    return raw, ""

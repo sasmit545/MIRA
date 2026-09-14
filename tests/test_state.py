@@ -2,7 +2,7 @@
 
 from mira.reasoning.contracts.objective import Objective
 from mira.reasoning.contracts.state import State
-from mira.reasoning.contracts.finding import Finding
+from mira.reasoning.contracts.finding import Confidence, Finding, Severity
 from mira.reasoning.contracts.tool import ToolCall, ToolResult
 
 
@@ -37,7 +37,7 @@ def test_record_tool_call_and_result():
 def test_add_finding_and_evidence():
     obj = Objective(description="Test objective")
     state = State(objective=obj, run_id="test_run")
-    finding = Finding(title="Test", description="Test", severity="info", confidence="low", evidence_refs=[], source_location="test")
+    finding = Finding(title="Test", description="Test", severity=Severity.INFO, confidence=Confidence.LOW, evidence_refs=[], source_location="test")
     state.add_finding(finding)
     assert state.findings == [finding]
 

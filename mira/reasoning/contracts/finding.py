@@ -21,8 +21,13 @@ class Confidence(Enum):
 
 @dataclass(frozen=True)
 class Evidence:
-    """Reference to an observation in the State."""
-    observation_index: int  # Index into State.observations list
+    """Reference to a piece of evidence by its identifier.
+
+    An index into State.observations outlived the list it indexed: State is
+    local to one run and is discarded when the loop returns, so the reference
+    was dangling by the time anyone read it. An identifier survives the run.
+    """
+    evidence_id: str
 
 
 @dataclass(frozen=True)

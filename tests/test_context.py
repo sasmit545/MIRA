@@ -1,5 +1,6 @@
 """Tests for ContextBuilder."""
 
+from mira.core.evidence import Evidence
 from mira.reasoning.contracts.objective import Objective
 from mira.reasoning.contracts.output import FinalOutput
 from mira.reasoning.contracts.state import State
@@ -98,3 +99,30 @@ def test_long_results_are_truncated():
 def test_truncate_leaves_short_text_alone():
     assert truncate("short") == "short"
     assert truncate("A" * (MAX_OBSERVATION_CHARS + 1)).startswith("A")
+
+
+def test_gathered_evidence_is_shown_with_the_identifiers_to_cite():
+    """The model is required to cite evidence identifiers in its findings, so
+    the context has to name them - otherwise every finding is rejected."""
+    state = build_state()
+    state.add_evidence(
+        Evidence(
+            id="E1",
+            observation="Section '.text' has entropy 7.90.",
+            source_agent="static",
+            capability="analyze_pe",
+            confidence=0.9,
+        )
+    )
+
+    context = ContextBuilder.build(state, build_definition())
+
+    assert "E1" in context
+    assert "analyze_pe" in context
+    assert "entropy 7.90" in context
+
+
+def test_a_run_with_no_evidence_says_nothing_about_it():
+    assert "cite these identifiers" not in ContextBuilder.build(
+        build_state(), build_definition()
+    )

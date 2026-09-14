@@ -5,6 +5,7 @@ advertised every tool as taking none.
 """
 
 from mira.agents.static.wiring import tool_manifest
+from mira.reasoning.contracts.finding import Confidence, Severity
 from mira.reasoning.model.adapter import declarations, tool_parameters
 from mira.mcp.servers.static.capabilities import STATIC_CAPABILITIES
 
@@ -51,3 +52,33 @@ def test_every_capability_is_declared():
 
 def test_a_capability_with_no_arguments_still_declares_an_object():
     assert tool_parameters({}) == {"type": "object", "properties": {}}
+
+
+def report_schema():
+    return declared_by_name()["submit_report"]["parameters"]
+
+
+def test_severity_and_confidence_are_declared_as_constrained_values():
+    """Free-form strings meant the model was never asked for a value the
+    contract could type."""
+    finding = report_schema()["properties"]["findings"]["items"]["properties"]
+
+    assert finding["severity"]["enum"] == [member.value for member in Severity]
+    assert finding["confidence"]["enum"] == [member.value for member in Confidence]
+
+
+def test_the_model_is_asked_for_every_field_a_finding_needs():
+    findings = report_schema()["properties"]["findings"]
+
+    assert set(findings["items"]["required"]) == {
+        "title",
+        "description",
+        "severity",
+        "confidence",
+        "evidence_refs",
+    }
+    assert "findings" in report_schema()["required"]
+
+
+def test_the_model_is_asked_for_recommended_actions():
+    assert "recommended_actions" in report_schema()["properties"]

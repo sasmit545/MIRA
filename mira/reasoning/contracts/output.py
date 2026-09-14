@@ -1,6 +1,6 @@
 """Output contracts."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 from .finding import Finding
 from .tool import ToolResult
@@ -15,3 +15,4 @@ class FinalOutput:
     evidence: List[ToolResult]  # References to full observations held in State
     completion_reason: str  # e.g., "reported", "limit_turns", "limit_calls", "degraded"
     metadata: dict  # turns, tool calls, token usage, run_id
+    recommended_actions: List[str] = field(default_factory=list)

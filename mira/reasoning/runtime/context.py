@@ -42,6 +42,17 @@ def render_state(state: State) -> str:
         lines.append(f"  [{index}] {call.name}({arguments})")
         lines.append(f"      -> {_render_result(observation['result'])}")
 
+    if state.evidence:
+        # The model is required to cite these identifiers in its findings, so
+        # it has to be shown them. The observation is a sentence; the raw
+        # result it came from stays in the history above and in the trace.
+        lines.append("")
+        lines.append("Evidence gathered so far (cite these identifiers in your findings):")
+        for evidence in state.evidence:
+            lines.append(
+                f"  {evidence.id} [{evidence.capability}] {evidence.observation}"
+            )
+
     if state.findings:
         lines.append("")
         lines.append("Findings so far:")

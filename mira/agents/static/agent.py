@@ -133,7 +133,9 @@ class StaticAgent:
         )
 
         output = await loop.run(
-            LoopObjective(description=objective.description), agent_definition
+            LoopObjective(description=objective.description),
+            agent_definition,
+            evidence=evidence,
         )
         return InvestigationFinding(
             objective=objective, results=results, evidence=evidence, output=output
