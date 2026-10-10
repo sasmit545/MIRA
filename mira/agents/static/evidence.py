@@ -250,16 +250,24 @@ def _extract_strings(data: dict, prior: dict[str, dict], coverage: str) -> list[
 
 
 def _calculate_entropy(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
+    signals = []
     entropy = data.get("entropy") or 0.0
-    if entropy < HIGH_REGION_ENTROPY:
-        return []
-    length = data.get("length") or 0
-    offset = data.get("offset") or 0
-    return [Signal(
-        f"The {length} bytes at offset {offset} have entropy {entropy:.2f}, at or above the "
-        f"{HIGH_REGION_ENTROPY} threshold that suggests compressed or encrypted content.",
-        _entropy_confidence(entropy, HIGH_REGION_ENTROPY),
-    )]
+    if entropy >= HIGH_REGION_ENTROPY:
+        signals.append(Signal(
+            f"The {data.get('length') or 0} bytes at offset {data.get('offset') or 0} have entropy {entropy:.2f}, "
+            f"at or above the {HIGH_REGION_ENTROPY} threshold that suggests compressed or encrypted content.",
+            _entropy_confidence(entropy, HIGH_REGION_ENTROPY),
+        ))
+    # A packed stub can hide inside a region whose average looks ordinary.
+    chunks = data.get("chunks") or []
+    high = [chunk for chunk in chunks if (chunk.get("entropy") or 0.0) >= HIGH_REGION_ENTROPY]
+    if high:
+        signals.append(Signal(
+            f"{len(high)} of {len(chunks)} windows have entropy at or above the {HIGH_REGION_ENTROPY} "
+            f"threshold, at offsets {_examples([chunk.get('offset') for chunk in high])}.",
+            _entropy_confidence(max(chunk["entropy"] for chunk in high), HIGH_REGION_ENTROPY),
+        ))
+    return signals
 
 
 def _scan_yara(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:

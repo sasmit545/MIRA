@@ -338,3 +338,23 @@ def test_entropy_thresholds_are_the_documented_knobs():
     """These are tuning knobs the signal table depends on, not literals."""
     assert PACKED_SECTION_ENTROPY <= 8.0
     assert HIGH_REGION_ENTROPY <= 8.0
+
+
+# --- Entropy windows reach the evidence (R15) ------------------------------
+
+
+def windows(high_at=()):
+    chunks = [{"offset": index * 64, "length": 64, "entropy": 7.6 if index in high_at else 3.0} for index in range(65)]
+    return ok({"entropy": 4.0, "offset": 0, "length": 65 * 64, "chunks": chunks})
+
+
+def test_high_entropy_windows_are_one_observation_with_their_offsets():
+    signals = normalize("calculate_entropy", windows(high_at=(3, 40)), {})
+
+    assert len(signals) == 1
+    assert "2 of 65" in signals[0].observation
+    assert "192" in signals[0].observation and "2560" in signals[0].observation
+
+
+def test_windows_and_region_below_the_threshold_are_silent():
+    assert normalize("calculate_entropy", windows(), {}) == []

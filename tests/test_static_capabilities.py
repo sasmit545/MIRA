@@ -86,6 +86,39 @@ class EntropyTests(unittest.TestCase):
         self.assertGreater(chunks[-1]["entropy"], 0.0)
         self.assertEqual(sum(chunk["length"] for chunk in chunks), 8 + 512)
 
+    def test_an_over_cap_chunk_request_is_rejected_naming_the_smallest_valid_size(self):
+        from mira.capabilities.static.entropy_analyzer import MAX_ENTROPY_CHUNKS
+
+        size = 4 * 1024 * 1024
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.bin"
+            artifact_path.write_bytes(b"\x00" * size)
+            artifact = ArtifactStore(temporary_directory).register("sample-5", artifact_path)
+
+            result = calculate_entropy(artifact, offset=0, length=size, chunk_size=1)
+
+        self.assertEqual(result["error"]["code"], "INVALID_INPUT")
+        self.assertIn(f"chunk_size of at least {-(-size // MAX_ENTROPY_CHUNKS)}", result["error"]["message"])
+
+    def test_a_request_at_the_chunk_cap_succeeds(self):
+        from mira.capabilities.static.entropy_analyzer import MAX_ENTROPY_CHUNKS
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.bin"
+            artifact_path.write_bytes(bytes(range(256)) * MAX_ENTROPY_CHUNKS)
+            artifact = ArtifactStore(temporary_directory).register("sample-6", artifact_path)
+
+            result = calculate_entropy(artifact, offset=0, length=4 * MAX_ENTROPY_CHUNKS, chunk_size=4)
+
+        self.assertEqual(len(result["data"]["chunks"]), MAX_ENTROPY_CHUNKS)
+
+    def test_the_contract_states_the_chunk_cap(self):
+        from mira.capabilities.static.entropy_analyzer import MAX_ENTROPY_CHUNKS
+        from mira.contracts.capabilities.static.entropy import CalculateEntropyInput
+
+        description = CalculateEntropyInput.model_fields["chunk_size"].description
+        self.assertIn(str(MAX_ENTROPY_CHUNKS), description)
+
     def test_chunk_size_without_a_region_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             artifact_path = Path(temporary_directory) / "sample.bin"
