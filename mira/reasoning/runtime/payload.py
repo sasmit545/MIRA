@@ -71,11 +71,11 @@ def select(output: Any, arguments: Dict[str, Any]) -> Tuple[str, str]:
     could mean anything in, so asking for one is an explicit failure that names
     the arrays that do exist.
     """
-    path, start, count, terms, failure = _recall_arguments(arguments)
+    path, start, count, terms, fields, failure = _recall_arguments(arguments)
     if failure:
         return "", failure
 
-    positional = start is not None or count is not None or terms is not None
+    positional = start is not None or count is not None or terms is not None or fields is not None
     if path is None and positional:
         arrays = list_arrays(output)
         if len(arrays) != 1:
@@ -90,7 +90,7 @@ def select(output: Any, arguments: Dict[str, Any]) -> Tuple[str, str]:
     if not isinstance(target, list):
         if positional:
             return "", (
-                f"{where} is not an array; start, count and contains apply to arrays: "
+                f"{where} is not an array; start, count, contains and fields apply to arrays: "
                 f"{_array_names(list_arrays(output))}"
             )
         text = json.dumps(target, sort_keys=True, default=repr)
@@ -125,11 +125,26 @@ def select(output: Any, arguments: Dict[str, Any]) -> Tuple[str, str]:
             if picked else f"{where}: no items (it holds {len(target)})"
         )
 
+    keys = sorted({key for _, item in picked if isinstance(item, dict) for key in item})
+    if fields is not None:
+        # Search above ran over whole items; only the display is narrowed.
+        if keys and not set(fields) & set(keys):
+            return "", f"none of fields {fields} exist on the items of {where}; their keys are {', '.join(keys)}"
+        picked = [
+            (index, {key: item[key] for key in fields if key in item} if isinstance(item, dict) else item)
+            for index, item in picked
+        ]
+        header += f"; fields {fields}"
+
     lines, used = [], 0
     for index, item in picked:
         line = f"[{index}] {truncate(_serialize(item), MAX_RECALL_CHARS // 4)}"
         if used + len(line) > MAX_RECALL_CHARS and lines:
             header += f"; stopped at item {index} to stay within the recall limit, continue with start={index}"
+            if fields is None and keys:
+                # A live model paged a 35-item array 10 at a time: most of each
+                # item was a block it did not need. Narrowing fits far more.
+                header += f", or show fewer keys per item with fields (they have: {', '.join(keys)})"
             break
         lines.append(line)
         used += len(line) + 1
@@ -143,10 +158,10 @@ def select(output: Any, arguments: Dict[str, Any]) -> Tuple[str, str]:
 
 
 def _recall_arguments(arguments: Dict[str, Any]):
-    """Validate the optional selectors. Returns (path, start, count, terms, failure)."""
+    """Validate the optional selectors. Returns (path, start, count, terms, fields, failure)."""
     path = arguments.get("path")
     if path is not None and (not isinstance(path, str) or not path.strip()):
-        return None, None, None, None, "path must be a dotted path such as data.strings"
+        return None, None, None, None, None, "path must be a dotted path such as data.strings"
 
     numbers = {}
     for name, low, high in (("start", 0, None), ("count", 1, MAX_RECALL_ITEMS)):
@@ -156,7 +171,7 @@ def _recall_arguments(arguments: Dict[str, Any]):
             or value < low or (high is not None and value > high)
         ):
             bound = f"between {low} and {high}" if high else f"at least {low}"
-            return None, None, None, None, f"{name} must be an integer {bound}"
+            return None, None, None, None, None, f"{name} must be an integer {bound}"
         numbers[name] = value
 
     terms = arguments.get("contains")
@@ -166,10 +181,18 @@ def _recall_arguments(arguments: Dict[str, Any]):
         if not isinstance(terms, list) or not terms or not all(
             isinstance(term, str) and term.strip() for term in terms
         ):
-            return None, None, None, None, "contains must be a non-empty list of non-empty strings"
+            return None, None, None, None, None, "contains must be a non-empty list of non-empty strings"
         terms = [term.strip().lower() for term in terms]
 
-    return (path.strip() if path else None), numbers["start"], numbers["count"], terms, ""
+    fields = arguments.get("fields")
+    if isinstance(fields, str):
+        fields = [fields]
+    if fields is not None and (
+        not isinstance(fields, list) or not fields or not all(isinstance(name, str) and name.strip() for name in fields)
+    ):
+        return None, None, None, None, None, "fields must be a non-empty list of item keys"
+
+    return (path.strip() if path else None), numbers["start"], numbers["count"], terms, fields, ""
 
 
 def _resolve(output: Any, path: Optional[str]) -> Tuple[Any, str]:

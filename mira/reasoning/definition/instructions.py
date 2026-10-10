@@ -43,6 +43,7 @@ def assemble_instructions(
         "Reading past a digest:",
         "The capability history shows each result as a partial digest: array lengths, the first and last items, and the evidence read from it.",
         "When a digest marked partial may hide what you need, call recall_observation with the call's handle, and a path plus a range (start, count) or a search (contains).",
+        "To survey a whole large array in one recall, name only the keys you need with fields (for example [\"rule_id\"]) instead of paging through full items.",
         "Evidence such as 'and N more' also means the rest is only reachable by recall. Do not rerun a capability to see more of its result.",
         "",
         "Error handling:",

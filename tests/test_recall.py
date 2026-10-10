@@ -343,3 +343,43 @@ async def test_recalls_past_the_per_turn_cap_are_refused(tmp_path):
 
     assert "Recall not served" in model.contexts[2]
     assert "items 2..2 of 1000" in model.contexts[2]
+
+
+# --- fields: survey a whole large array in one recall
+
+from mira.reasoning.runtime.payload import select as select_recall
+
+CAPA = {"data": {"findings": [
+    {"rule_id": f"rule-{n:02d}", "namespace": f"ns/{n}", "meta": {"scope": "function", "attack": ["T1"] * 20, "notes": "x" * 400}}
+    for n in range(35)
+]}}
+
+
+def test_fields_fit_a_whole_large_array_in_one_recall():
+    """The live run paged these 35 findings ten at a time; one recall now does it."""
+    text, failure = select_recall(CAPA, {"path": "data.findings", "count": 35, "fields": ["rule_id"]})
+
+    assert failure == ""
+    assert "items 0..34 of 35" in text and "stopped" not in text
+    assert '[34] {"rule_id": "rule-34"}' in text
+    assert "meta" not in text.split("\n", 1)[1]  # the bulky block is gone from every item
+
+
+def test_a_cut_off_recall_suggests_fields_and_names_the_keys():
+    text, _ = select_recall(CAPA, {"path": "data.findings", "count": 35})
+
+    assert "stopped at item" in text
+    assert "show fewer keys per item with fields (they have: meta, namespace, rule_id)" in text
+
+
+def test_contains_searches_whole_items_while_fields_narrow_the_display():
+    text, _ = select_recall(CAPA, {"path": "data.findings", "contains": ["ns/7"], "fields": ["rule_id"]})
+
+    assert '[7] {"rule_id": "rule-07"}' in text
+    assert "ns/7" not in text.split("\n", 1)[1]
+
+
+def test_unknown_fields_are_refused_with_the_real_keys():
+    _, failure = select_recall(CAPA, {"path": "data.findings", "fields": ["name"]})
+
+    assert failure == "none of fields ['name'] exist on the items of data.findings; their keys are meta, namespace, rule_id"

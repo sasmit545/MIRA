@@ -313,6 +313,14 @@ def _recall_declaration() -> dict:
                     "items": {"type": "string"},
                     "description": "Return only array items whose text contains any of these, ignoring case. Plain text, not regex.",
                 },
+                "fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Show only these keys of each array item, such as [\"rule_id\"] or [\"dll\", \"name\"], "
+                        "so a whole large array fits in one recall. contains still searches whole items."
+                    ),
+                },
             },
             "required": ["handle"],
         },
