@@ -1,16 +1,35 @@
 """YARA scanning against configured rule sets only."""
 
+import difflib
 from pathlib import Path
 
 from mira.core.artifact import Artifact
 from mira.capabilities.static.common import is_pe, paginate, result_error, result_ok
 
 
+def _ruleset_hint(asked: str, names: list[str]) -> str:
+    """Enough for a caller to pick a real name. Hundreds may be configured,
+    so name the closest ones, or the prefix families and a few examples."""
+    if not names:
+        return "no rulesets are configured"
+    close = difflib.get_close_matches(asked, names, n=5, cutoff=0.5)
+    if close:
+        return f"closest configured: {', '.join(close)}"
+    families = sorted({name.split("_", 1)[0] for name in names})
+    return (
+        f"{len(names)} are configured, named after their rule files by family "
+        f"({', '.join(families[:15])}), e.g. {', '.join(sorted(names)[:5])}"
+    )
+
+
 def scan_yara(artifact: Artifact, *, ruleset: str, limit: int = 100, offset: int = 0, rulesets: dict[str, Path] | None = None) -> dict:
     configured_rulesets = rulesets or {}
     rules_path = configured_rulesets.get(ruleset)
     if rules_path is None:
-        return result_error(artifact.artifact_id, "scan_yara", "INVALID_INPUT", "ruleset is not configured")
+        return result_error(
+            artifact.artifact_id, "scan_yara", "INVALID_INPUT",
+            f"ruleset {ruleset!r} is not configured; {_ruleset_hint(ruleset, list(configured_rulesets))}",
+        )
     try:
         import yara
     except ImportError:

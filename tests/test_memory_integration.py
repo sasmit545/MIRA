@@ -49,9 +49,11 @@ class Recorder:
     def __init__(self, *responses):
         self.responses = list(responses)
         self.contexts = []
+        self.offered = []
 
     def generate(self, context, tools):
         self.contexts.append(context)
+        self.offered.append([spec.name for spec in tools])
         return self.responses[min(len(self.contexts) - 1, len(self.responses) - 1)]
 
 
@@ -175,6 +177,51 @@ async def test_citing_an_id_the_run_never_minted_leaves_the_notes_untouched(tmp_
 
     assert loop.completion.memory_rejections == 1
     assert state.working_memory.hypotheses[0].supporting_evidence == ["E1"]
+
+
+# --- The rejection bound ends in one report-only turn, not in nothing
+
+MALFORMED = ModelResponse(memory_update={"hypotheses": "not a list"})
+SALVAGED = '{"summary": "salvaged", "verdict": "suspicious", "findings": []}'
+
+
+async def test_a_run_ended_by_rejected_notes_still_gets_its_report(tmp_path):
+    model, state, result, _ = await run(
+        tmp_path,
+        ModelResponse(tool_calls=[call("detect_packer")]),  # no notes: rejection 1
+        MALFORMED,  # 2
+        MALFORMED,  # 3: the bound trips
+        ModelResponse(report=SALVAGED),
+    )
+
+    assert (result.summary, result.verdict) == ("salvaged", "suspicious")
+    # Still degraded: the notes lag the results, so nothing will be promoted.
+    assert result.completion_reason == "degraded"
+    assert result.evidence == ["E1"]
+    assert "Run ending: notes were rejected 3 times" in model.contexts[-1]
+    assert model.offered[-1] == []  # no capability on offer
+    assert result.metadata["turns"] == 4
+
+
+async def test_no_report_on_the_final_turn_ends_inconclusive(tmp_path):
+    model, _, result, _ = await run(
+        tmp_path,
+        ModelResponse(tool_calls=[call("detect_packer")]),
+        MALFORMED,
+    )
+
+    assert len(model.contexts) == 4  # three rejected turns, one final
+    assert (result.verdict, result.completion_reason) == ("inconclusive", "degraded")
+
+
+async def test_the_rejection_says_what_to_send(tmp_path):
+    model, *_ = await run(
+        tmp_path,
+        ModelResponse(tool_calls=[call("detect_packer")]),
+        ModelResponse(report=REPORT),
+    )
+
+    assert "Send a record_memory call in the same response" in model.contexts[1]
 
 
 # --- Observers see the notes and the recalls as they happen

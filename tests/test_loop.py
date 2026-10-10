@@ -393,7 +393,8 @@ async def test_a_missing_narrative_is_rejected_and_the_reason_reaches_the_model(
     )
 
     rejected = [o.error for o in result.observations if o.error]
-    assert rejected == ["Notes rejected: record_memory is required on every turn that calls a capability"]
+    assert len(rejected) == 1
+    assert rejected[0].startswith("Notes rejected: record_memory is required on every turn that calls a capability")
     assert calls == ["probe"]
 
 

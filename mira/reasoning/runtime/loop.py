@@ -1,6 +1,7 @@
 """Agent loop."""
 
 import copy
+import dataclasses
 import json
 from typing import Callable, List, Optional
 
@@ -175,6 +176,11 @@ class AgentLoop:
                 self._notify({"kind": "report_rejected", "turn": state.turn_count + 1, "failure": failure})
             state.turn_count += 1
 
+        if self.completion.memory_rejections >= MAX_MEMORY_REJECTIONS and self.completion.consecutive_empty_responses < 2:
+            salvaged = await self._final_report_turn(state, agent_def)
+            if salvaged is not None:
+                return salvaged
+
         return FinalOutput(
             summary="The investigation stopped before the model submitted a report.",
             verdict="inconclusive",
@@ -186,10 +192,52 @@ class AgentLoop:
             memory=state.working_memory,
         )
 
+    async def _final_report_turn(self, state: State, agent_def: AgentDefinition) -> Optional[FinalOutput]:
+        """One last turn after the notes bound trips, accepting only a report.
+
+        The run stays degraded - its notes lag its results, so nothing is
+        promoted - but the investigation it paid for is not discarded.
+        """
+        state.record_harness_observation(
+            ToolCall(tool_call_id=REPORT_TOOL_CALL_ID, name=REPORT_TOOL_CALL_ID, arguments={}),
+            ToolResult(
+                tool_call_id=REPORT_TOOL_CALL_ID,
+                success=False,
+                error=(
+                    f"Run ending: notes were rejected {MAX_MEMORY_REJECTIONS} times. "
+                    "Call submit_report now with what you have; no capability will run."
+                ),
+            ),
+        )
+        context_str = self.context.build(state, agent_def)
+        state.recalled = []
+        # No capabilities on offer: the adapter still declares submit_report.
+        response: ModelResponse = self.model.generate(context=context_str, tools=[])
+        state.record_usage(response.usage)
+        report, failure = None, "no report was submitted on the final turn"
+        if response.report is not None:
+            report, failure = self._parse_report(response.report, state, agent_def)
+        self.tracer.turn(context_str, response, [], [], state.snapshot(), token_usage=response.usage)
+        state.turn_count += 1
+        if report is None:
+            self._notify({"kind": "report_rejected", "turn": state.turn_count, "failure": failure})
+            return None
+        report = dataclasses.replace(
+            report, completion_reason="degraded", metadata={**report.metadata, **self._metadata(state)}
+        )
+        self._notify({"kind": "report", "turn": state.turn_count, "report": report})
+        return report
+
     def _merge_narrative(self, state: State, update: Optional[dict]) -> str:
         """Merge the turn's narrative; on rejection tell the model why."""
         if update is None:
-            failure = "record_memory is required on every turn that calls a capability"
+            # Says what to send, not only what was missing: a model that drops
+            # the notes under a long prompt needs the fix spelled out.
+            failure = (
+                "record_memory is required on every turn that calls a capability. "
+                "Send a record_memory call in the same response as the capability call; "
+                "empty lists are accepted when nothing changed."
+            )
         else:
             failure = apply_narrative(
                 state.working_memory, update, {item.id for item in state.evidence}

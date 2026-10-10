@@ -338,3 +338,20 @@ class LargeResultTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "ok", result.get("error"))
         self.assertEqual(len(result["data"]["strings"]), 1000)
         self.assertGreater(len(json.dumps(result).encode()), 64 * 1024)
+
+
+def test_an_unknown_yara_ruleset_names_real_ones():
+    """A guessed name ('default') must come back with names that exist."""
+    from mira.capabilities.static.yara_scanner import scan_yara
+    from mira.core.artifact import Artifact
+
+    artifact = Artifact(artifact_id="a", path=Path("unused"), file_type="pe", size=0, sha256="0" * 64)
+    rulesets = {name: Path(f"{name}.yar") for name in ("apt_apt10", "crime_emotet", "gen_webshells")}
+
+    near = scan_yara(artifact, ruleset="gen_webshell", rulesets=rulesets)
+    far = scan_yara(artifact, ruleset="default", rulesets=rulesets)
+
+    assert near["error"]["code"] == "INVALID_INPUT"
+    assert "closest configured: gen_webshells" in near["error"]["message"]
+    assert "3 are configured" in far["error"]["message"]
+    assert "apt, crime, gen" in far["error"]["message"]
