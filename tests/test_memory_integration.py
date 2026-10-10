@@ -72,6 +72,8 @@ async def run(tmp_path, *responses):
         ContextBuilder(),
         Tracer(run_id=RUN, output_dir=str(tmp_path)),
     )
+    loop.events = []
+    loop.on_turn = loop.events.append
     captured = {}
     original = loop._merge_narrative
 
@@ -173,3 +175,27 @@ async def test_citing_an_id_the_run_never_minted_leaves_the_notes_untouched(tmp_
 
     assert loop.completion.memory_rejections == 1
     assert state.working_memory.hypotheses[0].supporting_evidence == ["E1"]
+
+
+# --- Observers see the notes and the recalls as they happen
+
+
+async def test_observers_get_each_accepted_note_and_each_recall(tmp_path):
+    handle = trace_provenance(RUN, "detect_packer", 0)
+    _, _, _, loop = await run(
+        tmp_path,
+        ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes(
+            [{"id": "H1", "statement": "Packed.", "confidence": 0.5, "status": "open"}]
+        )),
+        ModelResponse(tool_calls=[ToolCall("r", "recall_observation", {"handle": handle})]),
+        ModelResponse(memory_update=notes([{"id": "H1", "status": "supported"}])),
+        ModelResponse(report=REPORT),
+    )
+
+    by_kind = [(event["kind"], event["turn"]) for event in loop.events if event["kind"] in ("notes", "recall")]
+    assert by_kind == [("notes", 1), ("recall", 2), ("notes", 3)]
+    first, recall, last = [event for event in loop.events if event["kind"] in ("notes", "recall")]
+    assert recall["handles"] == [handle]
+    # Each event is a snapshot: turn 3's revision did not rewrite turn 1's.
+    assert first["memory"].hypotheses[0].status == "open"
+    assert last["memory"].hypotheses[0].status == "supported"

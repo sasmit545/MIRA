@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
+import traceback
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 from pathlib import Path
@@ -19,6 +21,11 @@ from mira.reasoning.main import investigate
 from mira.reasoning.runtime.trace import trace_path
 
 TERMINAL = {"completed", "failed"}
+
+# uvicorn configures its own loggers only, so the module logger needs a
+# handler to reach the terminal.
+logger = logging.getLogger("mira.web")
+logger.addHandler(logging.StreamHandler())
 
 
 def _json_value(value: Any) -> Any:
@@ -120,10 +127,17 @@ def create_app(data_dir: Path = Path("runs/ui")) -> FastAPI:
 async def _run(record: dict[str, Any], sample_path: Path, max_turns: int, max_tool_calls: int) -> None:
     record["status"] = "running"
 
+    log_path = record["run_dir"] / "events.jsonl"
+
     def publish(event: dict) -> None:
         # Called on the event loop thread, so swapping the Event is race-free:
         # a subscriber captures it before reading and waits on that one.
-        record["events"].append(_json_value(event))
+        event = _json_value(event)
+        record["events"].append(event)
+        # On disk as it happens: the trace is written only when the run ends,
+        # so this is what survives a hung run or a killed server.
+        with log_path.open("a", encoding="utf-8") as log:
+            log.write(json.dumps(event, default=str) + "\n")
         changed, record["changed"] = record["changed"], asyncio.Event()
         changed.set()
 
@@ -140,10 +154,17 @@ async def _run(record: dict[str, Any], sample_path: Path, max_turns: int, max_to
         record["result"] = _json_value(output)
         record["status"] = "completed"
     except Exception as error:  # The UI reports the failed run; the trace remains inspectable.
+        logger.exception("investigation %s failed", record["id"])
         record["error"] = str(error)
+        record["traceback"] = traceback.format_exc()
         record["status"] = "failed"
     finally:
-        publish({"kind": record["status"], "result": record["result"], "error": record["error"]})
+        publish({
+            "kind": record["status"],
+            "result": record["result"],
+            "error": record["error"],
+            "traceback": record.get("traceback"),
+        })
 
 
 def _record_or_404(app: FastAPI, investigation_id: str, *, raw: bool = False) -> dict[str, Any]:

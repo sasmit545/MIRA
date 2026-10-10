@@ -156,7 +156,7 @@ async def test_unknown_tool_is_observed(tmp_path):
     assert "Unknown tool" in result.observations[0].error
 
 
-async def test_on_turn_sees_each_tool_call_and_the_final_report(tmp_path):
+async def test_on_turn_sees_each_tool_call_its_notes_and_the_final_report(tmp_path):
     spec = ToolSpec(name="probe", description="probes", parameters={})
     model = ScriptedModel(
         ModelResponse(tool_calls=[ToolCall(tool_call_id="1", name="probe", arguments={})], memory_update=NOTES),
@@ -170,7 +170,7 @@ async def test_on_turn_sees_each_tool_call_and_the_final_report(tmp_path):
     await loop.run(Objective(description="Test objective"), build_definition(tools=[spec]))
 
     kinds = [event["kind"] for event in events]
-    assert kinds == ["tool_calls", "report"]
+    assert kinds == ["tool_calls", "notes", "report"]
     assert events[0]["calls"][0].name == "probe"
 
 

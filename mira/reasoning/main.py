@@ -92,6 +92,11 @@ def _print_turn(event: dict) -> None:
             print(f"[turn {turn}] {call.name}({args}) -> {status}")
     elif kind == "memory_rejected":
         print(f"[turn {turn}] notes rejected: {event['failure']}")
+    elif kind == "notes":
+        memory = event["memory"]
+        print(f"[turn {turn}] notes: {len(memory.hypotheses)} hypotheses, {len(memory.open_questions)} open questions")
+    elif kind == "recall":
+        print(f"[turn {turn}] recall_observation({', '.join(map(str, event['handles']))})")
     elif kind == "report_rejected":
         print(f"[turn {turn}] report rejected: {event['failure']}")
     elif kind == "empty":

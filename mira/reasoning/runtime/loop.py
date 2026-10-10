@@ -1,5 +1,6 @@
 """Agent loop."""
 
+import copy
 import json
 from typing import Callable, List, Optional
 
@@ -104,10 +105,12 @@ class AgentLoop:
             calls: list[ToolCall] = []
             results: list[ToolResult] = []
             recalls = 0
+            recalled_handles: list = []
             for tool_call in response.tool_calls or []:
                 if tool_call.name == RECALL_TOOL_NAME:
                     # Harness, not a capability (KTD7): off-budget, owes no notes.
                     recalls += 1
+                    recalled_handles.append(tool_call.arguments.get("handle"))
                     state.recalled.append(
                         _recall(state, tool_call.arguments)
                         if recalls <= MAX_RECALLS_PER_TURN
@@ -158,8 +161,13 @@ class AgentLoop:
                 self.tracer.turn(context_str, response, calls, results, state.snapshot(), token_usage=response.usage)
             if calls:
                 self._notify({"kind": "tool_calls", "turn": state.turn_count + 1, "calls": calls, "results": results, "usage": response.usage})
+            if recalled_handles:
+                self._notify({"kind": "recall", "turn": state.turn_count + 1, "handles": recalled_handles})
             if memory_failure:
                 self._notify({"kind": "memory_rejected", "turn": state.turn_count + 1, "failure": memory_failure})
+            elif response.memory_update is not None:
+                # A copy: an observer may keep it after later turns revise the notes.
+                self._notify({"kind": "notes", "turn": state.turn_count + 1, "memory": copy.deepcopy(state.working_memory)})
             if report is not None:
                 self._notify({"kind": "report", "turn": state.turn_count + 1, "report": report})
                 return report
