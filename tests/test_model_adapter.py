@@ -56,5 +56,44 @@ class TokenUsageTests(unittest.TestCase):
         self.assertEqual(result.usage["total_tokens"], 15)
 
 
+def _call(name, arguments="{}", id="1"):
+    return SimpleNamespace(id=id, function=SimpleNamespace(name=name, arguments=arguments))
+
+
+REPORT_CALL = ("submit_report", json.dumps({"summary": "s", "verdict": "benign"}))
+MEMORY_CALL = ("record_memory", json.dumps({"understanding": "u"}))
+
+
+class SiblingCallTests(unittest.TestCase):
+    def generate(self, *calls):
+        built = [_call(name, args, id=str(i)) for i, (name, args) in enumerate(calls)]
+        adapter = _adapter_with_response(_fake_response(tool_calls=built))
+        return adapter.generate(context="ctx", tools=[])
+
+    def test_memory_alone_yields_an_update_and_no_capability_calls(self):
+        result = self.generate(MEMORY_CALL)
+
+        self.assertEqual(result.memory_update, {"understanding": "u"})
+        self.assertIsNone(result.tool_calls)
+
+    def test_capability_plus_memory_yields_both(self):
+        result = self.generate(MEMORY_CALL, ("file_info", "{}"))
+
+        self.assertEqual(result.memory_update, {"understanding": "u"})
+        self.assertEqual([call.name for call in result.tool_calls], ["file_info"])
+
+    def test_report_plus_memory_yields_both(self):
+        result = self.generate(MEMORY_CALL, REPORT_CALL)
+
+        self.assertIsNotNone(result.report)
+        self.assertEqual(result.memory_update, {"understanding": "u"})
+
+    def test_report_plus_capability_keeps_the_capability_call(self):
+        result = self.generate(("file_info", "{}"), REPORT_CALL)
+
+        self.assertIsNotNone(result.report)
+        self.assertEqual([call.name for call in result.tool_calls], ["file_info"])
+
+
 if __name__ == "__main__":
     unittest.main()

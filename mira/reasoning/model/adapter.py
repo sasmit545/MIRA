@@ -9,6 +9,8 @@ from typing import Any, List, Optional
 
 from openai import OpenAI
 
+from mira.core.hypothesis import PROVISIONAL
+
 from ..contracts.finding import Confidence, Severity
 from ..contracts.model import ModelResponse
 from ..contracts.tool import ToolCall
@@ -18,6 +20,7 @@ DEFAULT_MODEL = "grok-4.6"
 MAX_TOKENS = 16384
 
 REPORT_TOOL = "submit_report"
+MEMORY_TOOL = "record_memory"
 
 
 class ModelAdapter:
@@ -47,22 +50,33 @@ class ModelAdapter:
         usage = _usage(response.usage)
         message = response.choices[0].message
         calls: list[ToolCall] = []
+        report: Optional[str] = None
+        memory_update: Optional[dict] = None
         for call in message.tool_calls or []:
             arguments = _arguments(call.function.arguments)
             if call.function.name == REPORT_TOOL:
                 # The report rides the existing report path; findings default to
                 # empty so a terse submission still satisfies the output contract.
-                return ModelResponse(report=json.dumps({"findings": [], **arguments}), usage=usage)
-            calls.append(
-                ToolCall(
-                    tool_call_id=call.id,
-                    name=call.function.name,
-                    arguments=arguments,
+                report = json.dumps({"findings": [], **arguments})
+            elif call.function.name == MEMORY_TOOL:
+                memory_update = arguments
+            else:
+                calls.append(
+                    ToolCall(
+                        tool_call_id=call.id,
+                        name=call.function.name,
+                        arguments=arguments,
+                    )
                 )
-            )
 
-        if calls:
-            return ModelResponse(tool_calls=calls, usage=usage)
+        # One turn can carry any mix; a sibling call is never dropped.
+        if calls or report is not None or memory_update is not None:
+            return ModelResponse(
+                tool_calls=calls or None,
+                report=report,
+                memory_update=memory_update,
+                usage=usage,
+            )
 
         # No tool call: fall back to a JSON report in plain text. Text the model
         # spoke but we cannot use IS a real empty response — it can recover next
@@ -120,6 +134,7 @@ def declarations(tools: List[Any]) -> list[dict]:
         }
         for spec in tools
     ]
+    declared.append(_memory_declaration())
     declared.append(
         {
             "name": REPORT_TOOL,
@@ -180,6 +195,67 @@ def declarations(tools: List[Any]) -> list[dict]:
         }
     )
     return [{"type": "function", "function": function} for function in declared]
+
+
+def _memory_declaration() -> dict:
+    """The notebook the model keeps across turns. Declared independently of the
+    objective's allowlist, like submit_report: it is the harness's, not a capability."""
+
+    def entries(key: str, description: str) -> dict:
+        return {
+            "type": "array",
+            "description": description,
+            "items": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}, key: {"type": "string"}},
+                "required": ["id", key],
+            },
+        }
+
+    return {
+        "name": MEMORY_TOOL,
+        "description": (
+            "Record your working notes. Call this every turn, in the same response "
+            "as your capability call. Entries you omit are left unchanged."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "understanding": {
+                    "type": "string",
+                    "description": "A short current interpretation of the sample, not a copy of tool output.",
+                },
+                "hypotheses": {
+                    "type": "array",
+                    "description": "Beliefs you hold. Reuse an id to revise one.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "statement": {"type": "string"},
+                            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                            "status": {"type": "string", "enum": list(PROVISIONAL)},
+                            "supporting_evidence": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Evidence ids (E1, E2, ...).",
+                            },
+                            "contradicting_evidence": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Evidence ids that weaken it.",
+                            },
+                            "unknowns": {"type": "string", "description": "What would confirm or reject it."},
+                        },
+                        "required": ["id", "statement", "confidence", "status"],
+                    },
+                },
+                "open_questions": entries("question", "Questions still open."),
+                "candidates": entries("investigation", "Possible next investigations - candidates, not a plan."),
+            },
+            "required": ["understanding", "hypotheses", "open_questions", "candidates"],
+        },
+    }
 
 
 def _usage(usage: Any) -> Optional[dict]:

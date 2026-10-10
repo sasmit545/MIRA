@@ -288,3 +288,27 @@ async def test_a_report_with_no_recommended_actions_is_still_valid(tmp_path):
     result = await run_with_evidence(tmp_path, report(FINDING), "E1")
 
     assert result.recommended_actions == []
+
+
+async def test_a_report_does_not_discard_a_capability_call_in_the_same_turn(tmp_path):
+    spec = ToolSpec(name="probe", description="d", parameters={})
+    executed = []
+
+    async def executor(name, arguments):
+        executed.append(name)
+        return {"status": "ok"}
+
+    model = ScriptedModel(
+        ModelResponse(
+            tool_calls=[ToolCall(tool_call_id="1", name="probe", arguments={})],
+            report=REPORT,
+            memory_update={"understanding": "u"},
+        )
+    )
+    loop = build_loop(model, tmp_path, tools=[spec], executor=executor)
+
+    result = await loop.run(Objective(description="Test objective"), build_definition(tools=[spec]))
+
+    assert executed == ["probe"]
+    assert result.completion_reason == "reported"
+    assert result.metadata["tool_calls"] == 1

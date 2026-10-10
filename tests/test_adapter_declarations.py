@@ -47,7 +47,7 @@ def test_every_declaration_is_a_json_schema_object():
 
 
 def test_every_capability_is_declared():
-    assert set(declared_by_name()) == set(STATIC_CAPABILITIES) | {"submit_report"}
+    assert set(declared_by_name()) == set(STATIC_CAPABILITIES) | {"submit_report", "record_memory"}
 
 
 def test_a_capability_with_no_arguments_still_declares_an_object():
@@ -82,3 +82,17 @@ def test_the_model_is_asked_for_every_field_a_finding_needs():
 
 def test_the_model_is_asked_for_recommended_actions():
     assert "recommended_actions" in report_schema()["properties"]
+
+
+def test_record_memory_is_declared_even_when_the_objective_permits_one_capability():
+    only = [spec for spec in tool_manifest() if spec.name == "file_info"]
+    names = {tool["function"]["name"] for tool in declarations(only)}
+
+    assert names == {"file_info", "record_memory", "submit_report"}
+
+
+def test_record_memory_bounds_confidence_and_constrains_status():
+    hypothesis = declared_by_name()["record_memory"]["parameters"]["properties"]["hypotheses"]["items"]["properties"]
+
+    assert hypothesis["confidence"] == {"type": "number", "minimum": 0, "maximum": 1}
+    assert hypothesis["status"]["enum"] == ["open", "supported", "weakened"]

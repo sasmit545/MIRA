@@ -84,20 +84,7 @@ class AgentLoop:
             )
             state.record_usage(response.usage)
 
-            if response.report is not None:
-                self.completion.record_non_empty_response()
-                report, failure = self._parse_report(response.report, state, agent_def)
-                if report is not None:
-                    self._notify({"kind": "report", "turn": state.turn_count + 1, "report": report})
-                    return report
-                # Validation failure is an observation the model can recover from.
-                self._record_report_failure(state, response.report, failure)
-                self.tracer.turn(context_str, response, [], [], state.snapshot(), token_usage=response.usage)
-                self._notify({"kind": "report_rejected", "turn": state.turn_count + 1, "failure": failure})
-                state.turn_count += 1
-                continue
-
-            if not response.tool_calls:
+            if response.report is None and not response.tool_calls:
                 self.completion.record_empty_response()
                 self.tracer.turn(context_str, response, [], [], state.snapshot(), token_usage=response.usage)
                 self._notify({"kind": "empty", "turn": state.turn_count + 1})
@@ -106,17 +93,34 @@ class AgentLoop:
 
             self.completion.record_non_empty_response()
 
+            # Capabilities run before a sibling report is judged: the report may
+            # cite evidence these calls just minted, and dropping them would
+            # discard work already requested.
             calls: list[ToolCall] = []
             results: list[ToolResult] = []
-            for tool_call in response.tool_calls:
+            for tool_call in response.tool_calls or []:
                 tool_result = await self.tools.execute(tool_call)
                 state.record_tool_call(tool_call)
                 state.record_tool_result(tool_result)
                 calls.append(tool_call)
                 results.append(tool_result)
 
-            self.tracer.turn(context_str, response, calls, results, state.snapshot(), token_usage=response.usage)
-            self._notify({"kind": "tool_calls", "turn": state.turn_count + 1, "calls": calls, "results": results, "usage": response.usage})
+            report, failure = None, ""
+            if response.report is not None:
+                report, failure = self._parse_report(response.report, state, agent_def)
+                if report is None:
+                    # Validation failure is an observation the model can recover from.
+                    self._record_report_failure(state, response.report, failure)
+
+            if calls or report is None:
+                self.tracer.turn(context_str, response, calls, results, state.snapshot(), token_usage=response.usage)
+            if calls:
+                self._notify({"kind": "tool_calls", "turn": state.turn_count + 1, "calls": calls, "results": results, "usage": response.usage})
+            if report is not None:
+                self._notify({"kind": "report", "turn": state.turn_count + 1, "report": report})
+                return report
+            if response.report is not None:
+                self._notify({"kind": "report_rejected", "turn": state.turn_count + 1, "failure": failure})
             state.turn_count += 1
 
         return FinalOutput(
