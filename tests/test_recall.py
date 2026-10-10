@@ -49,6 +49,27 @@ def strings_page(size=1000, late=LATE):
 
 PAGE = strings_page()
 
+# 412 imports over 9 DLLs; the last three are ordinal-only.
+DLLS = [("KERNEL32.dll", 180), ("USER32.dll", 95), ("ADVAPI32.dll", 40), ("GDI32.dll", 30), ("SHELL32.dll", 20),
+        ("ole32.dll", 15), ("COMCTL32.dll", 15), ("msvcrt.dll", 12), ("ntdll.dll", 5)]
+
+
+def imports_envelope(**metadata):
+    imports = [
+        {"dll": dll, "name": f"{dll.split('.')[0]}_api_{index}", "ordinal": None, "address": 4096 + position}
+        for position, (dll, index) in enumerate((dll, index) for dll, count in DLLS for index in range(count))
+    ]
+    for ordinal, entry in enumerate(imports[-3:], 1):
+        entry.update(name=None, ordinal=ordinal)
+    return {
+        "status": "ok",
+        "data": {"imports": imports},
+        "metadata": {"capability": "list_imports", "offset": 0, "total": 412, "fetched": 412, "unfetched": 0, **metadata},
+    }
+
+
+IMPORTS = imports_envelope()
+
 
 def test_the_indicator_sits_beyond_the_old_prefix_boundary():
     """Guards the regression's premise: a 4,000-character prefix never saw it."""
@@ -64,14 +85,56 @@ def test_a_large_digest_is_bounded_and_says_it_is_partial():
     assert len(text) <= MAX_DIGEST_CHARS + len(PARTIAL_MARKER) + 80
     assert text.endswith(PARTIAL_MARKER)
     assert "data.strings (1000)" in text
-    assert "[1000 items:" in text
+    assert "data.strings: 1000 items, fields {value, offset, encoding}" in text
 
 
-def test_a_digest_samples_both_ends_of_an_array():
-    text = digest(PAGE)
+def test_a_digest_shows_a_large_list_as_schema_and_distributions():
+    text = digest(IMPORTS)
 
-    assert "benign_string_0000" in text
-    assert "benign_string_0999" in text
+    assert "data.imports: 412 items, fields {dll, name, ordinal, address}" in text
+    assert '"KERNEL32.dll" 180' in text and '"USER32.dll" 95' in text and '"ADVAPI32.dll" 40' in text
+    assert "name: 409 distinct, 3 null" in text
+    assert "_api_" not in text  # no item is sampled
+    assert "coverage: fetched 412 of 412 (offset 0)" in text
+    assert PARTIAL_MARKER in text
+
+
+def test_a_huge_list_digest_stays_bounded_and_shows_no_high_cardinality_value():
+    text = digest(strings_page(size=10_000, late=None))
+
+    assert len(text) <= MAX_DIGEST_CHARS + len(PARTIAL_MARKER) + 80
+    assert "benign_string" not in text
+    assert "value: 10000 distinct" in text and "offset: 10000 distinct" in text
+    assert '"ascii" 10000' in text
+
+
+def test_a_truncated_collection_says_what_was_never_fetched():
+    text = digest(imports_envelope(total=12_000, unfetched=11_588, has_more=True, next_offset=412))
+
+    assert "coverage: fetched 412 of 12000 (offset 0)" in text
+    assert "11588 not fetched" in text and "list_imports(offset=412)" in text
+
+
+def test_a_failed_later_page_is_named_in_the_coverage():
+    text = digest(imports_envelope(total=2000, unfetched=1588, next_offset=412, fetch_error="RESOURCE_LIMIT: timed out"))
+
+    assert "RESOURCE_LIMIT: timed out" in text
+
+
+def test_a_long_low_cardinality_value_is_truncated():
+    rows = {"data": {"rows": [{"kind": letter * 200} for letter in "xy" * 10]}}
+
+    text = digest(rows)
+
+    assert "kind: 2 distinct" in text
+    assert "x" * 200 not in text and "…(+" in text
+
+
+def test_a_large_scalar_array_shows_its_count_and_distinct_count():
+    text = digest({"data": {"names": [f"n{index % 30}" for index in range(500)]}})
+
+    assert "data.names: 500 items, 30 distinct" in text
+    assert "n7" not in text
 
 
 def test_a_short_array_is_shown_in_full():

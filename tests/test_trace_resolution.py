@@ -289,7 +289,8 @@ def test_a_result_that_mints_no_evidence_still_carries_a_bounded_digest():
 
     (record,) = capability_history(state)
 
-    assert record.digest.startswith("{strings: [1000 items:")
+    assert record.digest.startswith("{strings: [1000 items, summarized below]}")
+    assert "strings: 1000 items, 1 distinct" in record.digest
     assert "partial digest" in record.digest
     assert len(record.digest) < MAX_DIGEST_CHARS + 200
 

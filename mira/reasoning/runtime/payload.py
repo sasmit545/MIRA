@@ -7,6 +7,7 @@ job, and what it found already reaches the prompt as evidence.
 """
 
 import json
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 MAX_OBSERVATION_CHARS = 2000
@@ -19,7 +20,12 @@ MAX_RECALL_ITEMS = 200
 SCALAR_CHARS = 80
 INLINE_CHARS = 160  # an array or object this small is shown whole
 SKETCH_DEPTH = 3
-SMALL_ARRAY_ITEMS = 8  # shown whole; a larger array is sampled at both ends
+SMALL_ARRAY_ITEMS = 8  # shown whole; a larger array is summarized
+# A larger array's summary: its fields, and value counts for the fields whose
+# values repeat. Values come from the sample, so only few of them are shown.
+LOW_CARDINALITY = 50
+TOP_VALUES = 5
+MAX_SUMMARY_FIELDS = 12
 PARTIAL_MARKER = "[partial digest: the full observation is kept; recall_observation retrieves any part of it]"
 
 
@@ -31,20 +37,49 @@ def truncate(text: str, limit: int = MAX_OBSERVATION_CHARS) -> str:
 
 
 def digest(output: Any, limit: int = MAX_DIGEST_CHARS) -> str:
-    """A bounded, code-derived summary of a successful result (R20).
+    """A bounded, code-derived summary of a successful result (R4, R6).
 
-    Every array is named with its length and sampled from both ends, so what
-    sits late in a large result is not hidden behind its first few thousand
-    characters. Says plainly when anything was left out.
+    A large array is shown as its schema and value distributions, never as
+    sampled items: any sample is arbitrary, and the field names are what a
+    recall needs. Coverage and the array list always survive the bound. Says
+    plainly when anything was left out.
     """
     elided: List[bool] = []
-    text = _sketch(output, 0, elided)
+    summaries: List[str] = []
+    body = "\n".join([_sketch(output, 0, elided, "", summaries), *summaries])
     arrays = list_arrays(output)
-    if arrays:
-        text += "\narrays: " + ", ".join(f"{path} ({length})" for path, length in arrays)
+    tail = [line for line in (
+        _coverage(output),
+        "arrays: " + ", ".join(f"{path} ({length})" for path, length in arrays) if arrays else "",
+    ) if line]
+    room = limit - sum(len(line) + 1 for line in tail)
+    if elided or len(body) > room:
+        body = truncate(body, max(room, limit // 4))
+    text = "\n".join([body, *tail])
     if elided or len(text) > limit:
-        text = truncate(text, limit) + "\n" + PARTIAL_MARKER
+        text += "\n" + PARTIAL_MARKER
     return text
+
+
+def _coverage(output: Any) -> str:
+    """The paging counters of the shared result envelope (KTD2), as a line."""
+    metadata = output.get("metadata") if isinstance(output, dict) else None
+    if not isinstance(metadata, dict) or "total" not in metadata:
+        return ""
+    total, offset = metadata["total"], metadata.get("offset") or 0
+    if "fetched" not in metadata:
+        return f"coverage: one page from offset {offset} of {total} items" + (
+            "; more remain past it" if metadata.get("has_more") else ""
+        )
+    line = f"coverage: fetched {metadata['fetched']} of {total} (offset {offset})"
+    if metadata.get("unfetched"):
+        line += f"; {metadata['unfetched']} not fetched"
+        if "next_offset" in metadata:
+            call = metadata.get("capability") or "the same capability"
+            line += f", the rest with {call}(offset={metadata['next_offset']})"
+    if metadata.get("fetch_error"):
+        line += f"; fetching stopped: {metadata['fetch_error']}"
+    return line
 
 
 def list_arrays(value: Any, prefix: str = "") -> List[Tuple[str, int]]:
@@ -217,7 +252,7 @@ def _resolve(output: Any, path: Optional[str]) -> Tuple[Any, str]:
     return value, ""
 
 
-def _sketch(value: Any, depth: int, elided: List[bool]) -> str:
+def _sketch(value: Any, depth: int, elided: List[bool], path: str, summaries: List[str]) -> str:
     if isinstance(value, str):
         if len(value) > SCALAR_CHARS:
             elided.append(True)
@@ -235,21 +270,52 @@ def _sketch(value: Any, depth: int, elided: List[bool]) -> str:
         return f"{{…{size}}}" if isinstance(value, dict) else f"[…{size}]"
 
     if isinstance(value, dict):
-        parts = [f"{key}: {_sketch(child, depth + 1, elided)}" for key, child in value.items()]
+        parts = [
+            f"{key}: {_sketch(child, depth + 1, elided, f'{path}.{key}' if path else str(key), summaries)}"
+            for key, child in value.items()
+        ]
         return "{" + ", ".join(parts) + "}"
 
     if len(value) <= SMALL_ARRAY_ITEMS:
-        # A handful of items (PE sections, say) is shown in full: sampling
+        # A handful of items (PE sections, say) is shown in full: a summary
         # would hide the odd one out, which is usually the one that matters.
-        items = [_sketch(item, depth + 1, elided) for item in value]
+        items = [_sketch(item, depth + 1, elided, f"{path}.{index}", summaries) for index, item in enumerate(value)]
         return f"[{len(value)} items: " + ", ".join(items) + "]"
 
-    # Both ends of a large array: what a capability returns late is as likely
-    # to matter as what it returns first.
     elided.append(True)
-    head = [_sketch(item, depth + 1, elided) for item in value[:2]]
-    tail = [_sketch(value[-1], depth + 1, elided)]
-    return f"[{len(value)} items: " + ", ".join(head + [f"…{len(value) - 3} more…"] + tail) + "]"
+    summaries.append(_summary(path or "(whole result)", value, elided))
+    return f"[{len(value)} items, summarized below]"
+
+
+def _summary(path: str, items: list, elided: List[bool]) -> str:
+    """A large array as its size, its fields, and how their values spread."""
+    if not all(isinstance(item, dict) for item in items):
+        return f"{path}: {len(items)} items, {len({_serialize(item) for item in items})} distinct"
+    fields = list(dict.fromkeys(key for item in items for key in item))
+    lines = [f"{path}: {len(items)} items, fields {{{', '.join(fields)}}}"]
+    for field in fields[:MAX_SUMMARY_FIELDS]:
+        # A missing key counts as null, as a recall filter treats it.
+        present = [_serialize(item[field]) for item in items if item.get(field) is not None]
+        counts = Counter(present)
+        line = f"  {field}: {len(counts)} distinct"
+        if len(items) > len(present):
+            line += f", {len(items) - len(present)} null"
+        if len(counts) <= LOW_CARDINALITY and len(counts) * 2 <= len(present):
+            top = counts.most_common(TOP_VALUES)
+            line += " — " + ", ".join(f"{_clip(value, elided)} {count}" for value, count in top)
+            if len(counts) > len(top):
+                line += f", … (+{len(counts) - len(top)})"
+        lines.append(line)
+    if len(fields) > MAX_SUMMARY_FIELDS:
+        lines.append(f"  (+{len(fields) - MAX_SUMMARY_FIELDS} more fields)")
+    return "\n".join(lines)
+
+
+def _clip(text: str, elided: List[bool]) -> str:
+    if len(text) <= SCALAR_CHARS:
+        return text
+    elided.append(True)
+    return f"{text[:SCALAR_CHARS]}…(+{len(text) - SCALAR_CHARS} chars)"
 
 
 def _serialize(value: Any) -> str:

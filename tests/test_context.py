@@ -95,8 +95,8 @@ def test_a_large_result_is_digested_not_dumped():
 
     assert "partial digest" in context
     assert "data.strings (1000)" in context
-    assert "string-999" in context  # the last item is sampled, not only the first
-    assert "string-500" not in context
+    assert "data.strings: 1000 items, fields {value, offset}" in context
+    assert "string-999" not in context and "string-500" not in context
     assert len(context) < 6_000
 
 
@@ -233,6 +233,18 @@ def test_the_generic_notes_carry_no_static_vocabulary(role, scope):
     context = ContextBuilder.build(state, build_definition(role=role, scope=scope)).lower()
 
     assert STATIC_VOCABULARY.findall(context) == []
+
+
+def test_a_digest_of_any_array_speaks_only_its_own_keys_and_values():
+    """The schema digest is generic: nothing static leaks into it."""
+    from mira.reasoning.runtime.payload import digest
+
+    visits = {"data": {"visits": [{"city": city, "minutes": minutes % 7} for minutes, city in enumerate(["Lima", "Oslo"] * 40)]}}
+
+    text = digest(visits)
+
+    assert "fields {city, minutes}" in text and '"Lima" 40' in text
+    assert STATIC_VOCABULARY.findall(text.lower()) == []
 
 
 def test_a_huge_successful_result_barely_grows_the_prompt():
