@@ -101,6 +101,19 @@ class AgentLoop:
             calls: list[ToolCall] = []
             results: list[ToolResult] = []
             for tool_call in response.tool_calls or []:
+                prior = _prior_success(state, tool_call)
+                if prior is not None:
+                    # Capabilities are deterministic over one sample: rerunning an
+                    # identical call buys the same result and a duplicate evidence id.
+                    state.record_harness_observation(
+                        tool_call,
+                        ToolResult(
+                            tool_call_id=tool_call.tool_call_id,
+                            success=False,
+                            error=f"Not rerun: identical to history [{prior}]; use that result.",
+                        ),
+                    )
+                    continue
                 tool_result = await self.tools.execute(tool_call)
                 state.record_tool_call(tool_call)
                 state.record_tool_result(tool_result)
@@ -259,6 +272,21 @@ class AgentLoop:
         if state.tool_call_count >= agent_def.max_tool_calls:
             return "limit_calls"
         return "limit_turns"
+
+
+def _prior_success(state: State, call: ToolCall) -> Optional[int]:
+    """History index of an earlier successful call with the same name and
+    arguments. Failures are not matched: they may be transient and worth a retry."""
+    for index, observation in enumerate(state.observations):
+        past, result = observation["call"], observation["result"]
+        if (
+            result is not None
+            and result.success
+            and past.name == call.name
+            and past.arguments == call.arguments
+        ):
+            return index
+    return None
 
 
 # --- Report validation.

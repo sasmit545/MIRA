@@ -497,6 +497,20 @@ async def test_rejections_do_not_spend_the_capability_budget(tmp_path):
     assert len([o for o in result.observations]) == 2
 
 
+async def test_an_identical_call_is_not_rerun_but_new_arguments_are(tmp_path):
+    other = ToolCall(tool_call_id="2", name="probe", arguments={"offset": 4})
+    _, result, calls = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update=NOTES),
+        ModelResponse(tool_calls=[CALL, other], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+
+    assert calls == ["probe", "probe"]
+    assert result.metadata["tool_calls"] == 2
+    assert "Not rerun" in result.observations[1].error
+
+
 async def test_a_rejection_is_announced_to_the_observer(tmp_path):
     events = []
     calls, executor = counting_executor()
