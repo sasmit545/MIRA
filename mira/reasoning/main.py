@@ -15,6 +15,7 @@ from mira.agents.static.wiring import (
     STATIC_ROLE,
     STATIC_SCOPE,
     build_client,
+    build_evidence_executor,
     build_executor,
     tool_manifest,
 )
@@ -62,15 +63,21 @@ async def investigate(
         output_contract=FinalOutput,
     )
 
+    run_id = build_run_id(sample_path.stem, objective_text)
+    evidence: list = []
+    execute = build_evidence_executor(
+        build_executor(client, artifact_id),
+        run_id=run_id,
+        artifact_id=artifact_id,
+        evidence=evidence,
+    )
     loop = build_loop(
-        tool_runtime=ToolRuntime(manifest, build_executor(client, artifact_id)),
-        tracer=build_tracer(
-            run_id=build_run_id(sample_path.stem, objective_text), trace_dir=trace_dir
-        ),
+        tool_runtime=ToolRuntime(manifest, execute),
+        tracer=build_tracer(run_id=run_id, trace_dir=trace_dir),
         model=model,
         on_turn=on_turn,
     )
-    return await loop.run(Objective(description=objective_text), agent_def)
+    return await loop.run(Objective(description=objective_text), agent_def, evidence=evidence)
 
 
 def _print_turn(event: dict) -> None:

@@ -122,3 +122,34 @@ class VendoredRulesInitializedCheckTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EvidenceExecutorTests(unittest.IsolatedAsyncioTestCase):
+    PACKED = {"status": "ok", "data": {"packed": True, "indicators": ["high entropy"]}, "metadata": {}}
+
+    async def run_once(self, state=None):
+        from mira.agents.static.wiring import build_evidence_executor
+
+        async def invoke(capability, arguments):
+            return self.PACKED
+
+        evidence = []
+        execute = build_evidence_executor(
+            invoke, run_id="r", artifact_id="sample", evidence=evidence, state=state
+        )
+        await execute("detect_packer", {})
+        return evidence
+
+    async def test_mints_evidence_with_provenance_and_no_shared_state(self):
+        evidence = await self.run_once()
+        self.assertEqual([item.id for item in evidence], ["E1"])
+        self.assertEqual(evidence[0].provenance, "r#detect_packer#0")
+
+    async def test_deposits_into_shared_state_and_continues_numbering(self):
+        from mira.core.state import InvestigationState
+
+        state = InvestigationState()
+        await self.run_once(state)
+        evidence = await self.run_once(state)
+        self.assertEqual([item.id for item in state.evidence], ["E1", "E2"])
+        self.assertEqual(evidence[0].id, "E2")

@@ -9,17 +9,23 @@ in the reasoning package.
 from __future__ import annotations
 
 import os
+from collections import Counter
 from functools import lru_cache
 from pathlib import Path
 
+from mira.agents.static.evidence import normalize
 from mira.core.artifact import ArtifactStore
+from mira.core.evidence import Evidence
+from mira.core.state import InvestigationState
 from mira.mcp.isolation import AnalysisLimits
 from mira.mcp.servers.static.capabilities import STATIC_CAPABILITIES
 from mira.mcp.client import StaticMCPClient
 from mira.mcp.servers.static.server import StaticMCPServer
 from mira.reasoning.contracts.tool import ToolSpec
+from mira.reasoning.runtime.trace import trace_provenance
 
 ARTIFACT_ID = "sample"
+SOURCE_AGENT = "static"
 
 STATIC_ROLE = "You are a static malware investigator."
 STATIC_SCOPE = (
@@ -143,5 +149,58 @@ def build_executor(client: StaticMCPClient, artifact_id: str):
         parameters = {**arguments}
         parameters.pop("artifact_id", None)
         return client.invoke(capability, artifact_id=artifact_id, **parameters)
+
+    return execute
+
+
+def build_evidence_executor(
+    invoke,
+    *,
+    run_id: str,
+    artifact_id: str,
+    evidence: list[Evidence],
+    state: InvestigationState | None = None,
+):
+    """Wrap `invoke` so each result is normalized into evidence as it arrives.
+
+    The specialist is the one place that sees every result in order, so it is
+    where evidence identifiers are minted (KTD1). `evidence` is the caller's
+    accumulator, appended to in place; `state`, when given, also receives each
+    item so it outlives the run. Without a state the run only mints and
+    renders, which is what the CLI wants.
+
+    Positions are counted per capability: the runtime refuses a capability
+    outside the objective before it reaches this executor, yet the refusal
+    still reaches the trace, so a single run-wide counter drifts from it.
+    """
+    results: dict[str, dict] = {}
+    occurrences: Counter[str] = Counter()
+    # Numbering continues past whatever the shared state already holds: two
+    # runs both minting "E1" would leave their findings citing an identifier
+    # the orchestrator cannot resolve to one observation.
+    minted = len(state.evidence) if state is not None else 0
+
+    async def execute(capability: str, arguments: dict):
+        result = await invoke(capability, arguments)
+        provenance = trace_provenance(run_id, capability, occurrences[capability])
+        occurrences[capability] += 1
+        # `results` is deliberately read before this result joins it: a
+        # normalizer's `prior` is what earlier capabilities reported.
+        for signal in normalize(capability, result, results):
+            item = Evidence(
+                id=f"E{minted + len(evidence) + 1}",
+                observation=signal.observation,
+                source_agent=SOURCE_AGENT,
+                capability=capability,
+                artifact_id=artifact_id,
+                confidence=signal.confidence,
+                provenance=provenance,
+            )
+            evidence.append(item)
+            if state is not None:
+                # add_evidence already logs the change into its history.
+                state.add_evidence(item)
+        results[capability] = result
+        return result
 
     return execute

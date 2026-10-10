@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from pathlib import Path
 
 from mira.agents.base import InvestigationFinding
-from mira.agents.static.evidence import normalize
 from mira.agents.static.wiring import (
     STATIC_ROLE,
     STATIC_SCOPE,
+    build_evidence_executor,
     build_executor,
     tool_manifest,
 )
@@ -33,9 +32,6 @@ from mira.reasoning.contracts.objective import Objective as LoopObjective
 from mira.reasoning.contracts.output import FinalOutput
 from mira.reasoning.definition.agent import AgentDefinition
 from mira.reasoning.runtime.tool_runtime import ToolRuntime
-from mira.reasoning.runtime.trace import trace_provenance
-
-SOURCE_AGENT = "static"
 
 # Enum declaration order is ascending, so it doubles as the ranking.
 _SEVERITY_RANK = {member: rank for rank, member in enumerate(Severity)}
@@ -116,43 +112,15 @@ class StaticAgent:
         deposits its evidence into. Without one the run behaves exactly as
         before, which is what the CLI path wants.
         """
-        results: dict[str, dict] = {}
         evidence: list[Evidence] = []
         run_id = build_run_id(artifact_id, objective.name)
-        invoke = build_executor(self._client, artifact_id)
-        # The specialist is the one place that sees every result in order, so
-        # it is where evidence identifiers are minted (KTD1). Positions are
-        # counted per capability: the runtime refuses a capability outside the
-        # objective before it reaches this executor, yet the refusal still
-        # reaches the trace, so a single run-wide counter drifts from it.
-        occurrences: Counter[str] = Counter()
-        # Numbering continues past whatever the shared state already holds:
-        # two runs both minting "E1" would leave their findings citing an
-        # identifier the orchestrator cannot resolve to one observation.
-        minted = len(state.evidence) if state is not None else 0
-
-        async def execute(capability: str, arguments: dict):
-            result = await invoke(capability, arguments)
-            provenance = trace_provenance(run_id, capability, occurrences[capability])
-            occurrences[capability] += 1
-            # `results` is deliberately read before this result joins it: a
-            # normalizer's `prior` is what earlier capabilities reported.
-            for signal in normalize(capability, result, results):
-                item = Evidence(
-                    id=f"E{minted + len(evidence) + 1}",
-                    observation=signal.observation,
-                    source_agent=SOURCE_AGENT,
-                    capability=capability,
-                    artifact_id=artifact_id,
-                    confidence=signal.confidence,
-                    provenance=provenance,
-                )
-                evidence.append(item)
-                if state is not None:
-                    # add_evidence already logs the change into its history.
-                    state.add_evidence(item)
-            results[capability] = result
-            return result
+        execute = build_evidence_executor(
+            build_executor(self._client, artifact_id),
+            run_id=run_id,
+            artifact_id=artifact_id,
+            evidence=evidence,
+            state=state,
+        )
 
         manifest = tool_manifest()
         permitted = [spec for spec in manifest if spec.name in objective.capabilities]
