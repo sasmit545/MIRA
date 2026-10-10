@@ -416,19 +416,24 @@ async def test_the_first_capability_turn_owes_no_notes(tmp_path):
     assert calls == ["probe"]
 
 
-async def test_a_narrative_missing_a_field_names_the_field(tmp_path):
-    bad = {"understanding": "u", "hypotheses": [], "open_questions": []}
-    _, result, _ = await run_loop(
-        tmp_path, ModelResponse(tool_calls=[CALL], memory_update=bad), ModelResponse(report=REPORT)
+async def test_a_missing_field_means_no_change_and_a_malformed_one_is_named(tmp_path):
+    """A live model's forced notes omitted fields it had nothing new for."""
+    partial = {"understanding": "Packed.", "hypotheses": [hypothesis()]}
+    loop, result, _ = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update=partial),
+        ModelResponse(memory_update={"candidates": "not a list"}),
+        ModelResponse(report=REPORT),
     )
 
-    assert "candidates" in [o.error for o in result.observations if o.error][0]
+    assert loop.completion.memory_rejections == 1
+    assert [o.error for o in result.observations if o.error] == ["Notes rejected: candidates must be an array"]
 
 
 async def test_a_rejected_narrative_keeps_the_capability_result_and_does_not_rerun_it(tmp_path):
     _, result, calls = await run_loop(
         tmp_path,
-        ModelResponse(tool_calls=[CALL], memory_update={"nope": 1}),
+        ModelResponse(tool_calls=[CALL], memory_update={"hypotheses": "not a list"}),
         ModelResponse(report=REPORT),
     )
 
@@ -439,7 +444,7 @@ async def test_a_rejected_narrative_keeps_the_capability_result_and_does_not_rer
 
 async def test_a_valid_report_survives_a_malformed_narrative(tmp_path):
     _, result, _ = await run_loop(
-        tmp_path, ModelResponse(report=REPORT, memory_update={"nope": 1})
+        tmp_path, ModelResponse(report=REPORT, memory_update={"hypotheses": "not a list"})
     )
 
     assert result.completion_reason == "reported"
@@ -494,7 +499,7 @@ async def test_empty_collections_are_accepted_and_change_nothing(tmp_path):
 
 async def test_alternating_rejected_and_accepted_narratives_still_terminate(tmp_path):
     good = ModelResponse(tool_calls=[CALL], memory_update=NOTES)
-    bad = ModelResponse(tool_calls=[CALL], memory_update={"nope": 1})
+    bad = ModelResponse(tool_calls=[CALL], memory_update={"hypotheses": "not a list"})
     model = ScriptedModel(bad, good, bad, good, bad, good, bad, good)
     calls, executor = counting_executor()
     loop = build_loop(model, tmp_path, tools=[PROBE], executor=executor)
@@ -508,7 +513,7 @@ async def test_alternating_rejected_and_accepted_narratives_still_terminate(tmp_
 async def test_rejections_do_not_spend_the_capability_budget(tmp_path):
     _, result, _ = await run_loop(
         tmp_path,
-        ModelResponse(tool_calls=[CALL], memory_update={"nope": 1}),
+        ModelResponse(tool_calls=[CALL], memory_update={"hypotheses": "not a list"}),
         ModelResponse(report=REPORT),
     )
 

@@ -13,8 +13,6 @@ from mira.core.hypothesis import PROVISIONAL
 
 from ..contracts.memory import Candidate, MemoryHypothesis, OpenQuestion, WorkingMemory
 
-REQUIRED = ("understanding", "hypotheses", "open_questions", "candidates")
-
 
 def apply_narrative(memory: WorkingMemory, update: Any, known_evidence: Collection[str]) -> str:
     """Merge `update` into `memory`. Returns "" on success, else the reason it
@@ -25,21 +23,21 @@ def apply_narrative(memory: WorkingMemory, update: Any, known_evidence: Collecti
     """
     if not isinstance(update, dict):
         return "record_memory must be an object"
-    missing = [name for name in REQUIRED if name not in update]
-    if missing:
-        return f"record_memory is missing required fields: {', '.join(missing)}"
 
-    understanding = update["understanding"]
+    # A missing field means "no change", exactly as an empty one does: the
+    # merge is additive, and a live model's forced notes omitted fields it had
+    # nothing new for. A field that is present must still be well-formed.
+    understanding = update.get("understanding", "")
     if not isinstance(understanding, str):
         return "understanding must be a string"
 
-    hypotheses, failure = _hypotheses(memory.hypotheses, update["hypotheses"], set(known_evidence))
+    hypotheses, failure = _hypotheses(memory.hypotheses, update.get("hypotheses", []), set(known_evidence))
     if hypotheses is None:
         return failure
-    questions, failure = _entries(memory.open_questions, update["open_questions"], "open_questions", "question", OpenQuestion)
+    questions, failure = _entries(memory.open_questions, update.get("open_questions", []), "open_questions", "question", OpenQuestion)
     if questions is None:
         return failure
-    candidates, failure = _entries(memory.candidates, update["candidates"], "candidates", "investigation", Candidate)
+    candidates, failure = _entries(memory.candidates, update.get("candidates", []), "candidates", "investigation", Candidate)
     if candidates is None:
         return failure
 
