@@ -159,41 +159,12 @@ class EvidenceExecutorTests(unittest.IsolatedAsyncioTestCase):
 
 import pytest
 
+from support import PagedImports
+
 from mira.agents.static.wiring import COLLECTED_CAPABILITIES, build_executor
-from mira.capabilities.static.common import paginate
 from mira.contracts.capabilities.static.list_imports import ListImportsOutput
 
 IMPORT_CAP = COLLECTED_CAPABILITIES["list_imports"][1]
-
-
-class PagedImports:
-    """Serves list_imports pages the way the server does, recording each call."""
-
-    def __init__(self, count, fail_from=None, raise_from=None):
-        self.imports = [
-            {"dll": "KERNEL32.dll", "name": f"Fn{index}", "ordinal": None, "address": 0x1000 + index}
-            for index in range(count)
-        ]
-        self.calls = []
-        self.fail_from = fail_from
-        self.raise_from = raise_from
-
-    async def invoke(self, capability, artifact_id, **parameters):
-        self.calls.append({"artifact_id": artifact_id, **parameters})
-        offset = parameters.get("offset", 0)
-        if self.raise_from is not None and offset >= self.raise_from:
-            raise RuntimeError("worker crashed")
-        if self.fail_from is not None and offset >= self.fail_from:
-            return {
-                "status": "error", "data": None,
-                "error": {"code": "RESOURCE_LIMIT", "message": "analysis timed out"},
-                "metadata": {"artifact_id": artifact_id, "capability": capability},
-            }
-        selected, page = paginate(self.imports, parameters.get("limit", 100), offset)
-        return {
-            "status": "ok", "data": {"imports": selected},
-            "metadata": {"artifact_id": artifact_id, "capability": capability, "tool_version": "0.1.0", **page},
-        }
 
 
 async def collect(client, **arguments):

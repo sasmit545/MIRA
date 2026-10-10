@@ -35,18 +35,20 @@ CONFIDENCE_STRONG = 0.8
 CONFIDENCE_MODERATE = 0.6
 CONFIDENCE_WEAK = 0.4  # a pattern that also occurs in benign software
 
-# Capabilities whose results are one page of a longer list. Their observations
-# say so, so the orchestrator never reads silence as proof of absence (R3).
-PAGED_CAPABILITIES = frozenset({
-    "list_imports",
-    "list_exports",
-    "extract_strings",
-    "scan_yara",
-    "run_capa",
-    "list_functions",
-    "disassemble_function",
-})
+# Capabilities whose results are a page of a longer list: the data key holding
+# it, and what an item is called. Their observations state how much of the
+# list they cover, so the orchestrator never reads silence as proof of absence.
+PAGED_CAPABILITIES: dict[str, tuple[str, str]] = {
+    "list_imports": ("imports", "imports"),
+    "list_exports": ("exports", "exports"),
+    "extract_strings": ("strings", "strings"),
+    "scan_yara": ("matches", "YARA matches"),
+    "run_capa": ("findings", "capa findings"),
+    "list_functions": ("functions", "functions"),
+    "disassemble_function": ("instructions", "instructions"),
+}
 
+# The claim when an envelope carries no list total to state coverage from.
 PAGE_CAVEAT = "within the returned page"
 
 STANDARD_SECTION_NAMES = frozenset({
@@ -72,11 +74,18 @@ NETWORK_IMPORTS = frozenset({
     "urldownloadtofile", "wsastartup", "winhttpopen", "winhttpsendrequest",
     "gethostbyname", "socket", "connect", "send", "recv",
 })
+# Resolving APIs at run time hides them from the import table, so a table
+# that looks clean is not proof of a clean program (R14). Benign loaders use
+# these too, hence weak.
+RUNTIME_RESOLUTION_IMPORTS = frozenset({
+    "loadlibrary", "loadlibraryex", "getprocaddress", "ldrloaddll", "ldrgetprocedureaddress",
+})
 IMPORT_CATEGORIES: tuple[tuple[str, frozenset[str], float], ...] = (
     ("anti-debugging", ANTI_DEBUG_IMPORTS, CONFIDENCE_STRONG),
     ("process injection", INJECTION_IMPORTS, CONFIDENCE_STRONG),
     ("cryptography", CRYPTO_IMPORTS, CONFIDENCE_WEAK),
     ("network communication", NETWORK_IMPORTS, CONFIDENCE_MODERATE),
+    ("run-time API resolution", RUNTIME_RESOLUTION_IMPORTS, CONFIDENCE_WEAK),
 )
 
 # Instructions used to detect a debugger, a VM, or a timing harness.
@@ -125,10 +134,31 @@ def normalize(capability: str, result: dict, prior: dict[str, dict]) -> list[Sig
     normalizer = NORMALIZERS.get(capability)
     if normalizer is None:
         return []
-    return normalizer(result.get("data") or {}, prior)
+    data = result.get("data") or {}
+    return normalizer(data, prior, _coverage(capability, data, result.get("metadata") or {}))
 
 
-def _analyze_pe(data: dict, prior: dict[str, dict]) -> list[Signal]:
+def _coverage(capability: str, data: dict, metadata: dict) -> str:
+    """How much of a paged list this result holds, as a phrase (R16).
+
+    Read from the envelope's paging counters (KTD2), so a collected list and a
+    single page are described by the same rule.
+    """
+    if capability not in PAGED_CAPABILITIES:
+        return ""
+    key, noun = PAGED_CAPABILITIES[capability]
+    total, offset = metadata.get("total"), metadata.get("offset") or 0
+    if total is None:
+        return PAGE_CAVEAT
+    held = len(data.get(key) or [])
+    if offset:
+        return f"within {held} of {total} {noun} fetched from offset {offset}"
+    if held >= total:
+        return f"among all {total} {noun}"
+    return f"within the first {held} of {total} {noun} fetched"
+
+
+def _analyze_pe(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
     signals = []
     for section in data.get("sections") or []:
         name = section.get("name") or "(unnamed)"
@@ -148,7 +178,7 @@ def _analyze_pe(data: dict, prior: dict[str, dict]) -> list[Signal]:
     return signals
 
 
-def _detect_packer(data: dict, prior: dict[str, dict]) -> list[Signal]:
+def _detect_packer(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
     indicators = data.get("indicators") or []
     if not data.get("packed") and not indicators:
         return []
@@ -162,21 +192,30 @@ def _detect_packer(data: dict, prior: dict[str, dict]) -> list[Signal]:
     )]
 
 
-def _list_imports(data: dict, prior: dict[str, dict]) -> list[Signal]:
-    names = [entry.get("name") for entry in data.get("imports") or [] if entry.get("name")]
+def _list_imports(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
+    imports = data.get("imports") or []
+    names = [entry.get("name") for entry in imports if entry.get("name")]
     signals = []
     for label, vocabulary, confidence in IMPORT_CATEGORIES:
         matched = [name for name in names if _is_known(name, vocabulary)]
         if matched:
             signals.append(Signal(
-                f"Imports associated with {label} appear {PAGE_CAVEAT}: "
+                f"Imports associated with {label} appear {coverage}: "
                 f"{_examples(matched)}.",
                 confidence,
             ))
+    nameless = len(imports) - len(names)
+    if nameless:
+        # Benign code imports some DLLs by ordinal too, so this is weak.
+        signals.append(Signal(
+            f"{nameless} of {len(imports)} imports {coverage} have no name and are imported by "
+            f"ordinal only, which hides which functions the program uses.",
+            CONFIDENCE_WEAK,
+        ))
     return signals
 
 
-def _list_exports(data: dict, prior: dict[str, dict]) -> list[Signal]:
+def _list_exports(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
     exports = data.get("exports") or []
     if not exports:
         return []
@@ -184,33 +223,33 @@ def _list_exports(data: dict, prior: dict[str, dict]) -> list[Signal]:
     unnamed = [entry for entry in exports if not entry.get("name")]
     if unnamed:
         signals.append(Signal(
-            f"{len(unnamed)} of {len(exports)} exports {PAGE_CAVEAT} are reachable only "
+            f"{len(unnamed)} of {len(exports)} exports {coverage} are reachable only "
             f"by ordinal, which hides their purpose from static inspection.",
             _fraction_confidence(len(unnamed), len(exports)),
         ))
     if _is_pe_without_dll_flag(prior):
         signals.append(Signal(
-            f"The file exports {len(exports)} symbols {PAGE_CAVEAT} although its PE header "
+            f"The file exports {len(exports)} symbols {coverage} although its PE header "
             f"does not set the DLL characteristic.",
             CONFIDENCE_MODERATE,
         ))
     return signals
 
 
-def _extract_strings(data: dict, prior: dict[str, dict]) -> list[Signal]:
+def _extract_strings(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
     values = [entry.get("value") or "" for entry in data.get("strings") or []]
     signals = []
     for label, pattern, confidence in STRING_CATEGORIES:
         matched = [match.group(0) for value in values for match in [pattern.search(value)] if match]
         if matched:
             signals.append(Signal(
-                f"Strings containing a {label} appear {PAGE_CAVEAT}: {_examples(matched)}.",
+                f"Strings containing a {label} appear {coverage}: {_examples(matched)}.",
                 confidence,
             ))
     return signals
 
 
-def _calculate_entropy(data: dict, prior: dict[str, dict]) -> list[Signal]:
+def _calculate_entropy(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
     entropy = data.get("entropy") or 0.0
     if entropy < HIGH_REGION_ENTROPY:
         return []
@@ -223,7 +262,7 @@ def _calculate_entropy(data: dict, prior: dict[str, dict]) -> list[Signal]:
     )]
 
 
-def _scan_yara(data: dict, prior: dict[str, dict]) -> list[Signal]:
+def _scan_yara(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
     matches = data.get("matches") or []
     signals = []
     for match in matches[:MAX_RULE_SIGNALS]:
@@ -232,26 +271,26 @@ def _scan_yara(data: dict, prior: dict[str, dict]) -> list[Signal]:
         signals.append(Signal(
             f"YARA rule {match.get('rule')!r} from namespace "
             f"{match.get('namespace') or '(default)'!r} matched this artifact{suffix} "
-            f"({PAGE_CAVEAT}).",
+            f"({coverage}).",
             CONFIDENCE_RULE_MATCH,
         ))
-    return signals + _remainder(len(matches), "YARA rules matched")
+    return signals + _remainder(len(matches), "YARA rules matched", coverage)
 
 
-def _run_capa(data: dict, prior: dict[str, dict]) -> list[Signal]:
+def _run_capa(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
     findings = data.get("findings") or []
     signals = []
     for finding in findings[:MAX_RULE_SIGNALS]:
         namespace = finding.get("namespace") or "(uncategorized)"
         signals.append(Signal(
             f"capa identified the capability {finding.get('rule_id')!r} "
-            f"({namespace}) in this artifact ({PAGE_CAVEAT}).",
+            f"({namespace}) in this artifact ({coverage}).",
             CONFIDENCE_RULE_MATCH,
         ))
-    return signals + _remainder(len(findings), "capa capabilities were identified")
+    return signals + _remainder(len(findings), "capa capabilities were identified", coverage)
 
 
-def _list_functions(data: dict, prior: dict[str, dict]) -> list[Signal]:
+def _list_functions(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
     functions = data.get("functions") or []
     size = _reported_size(prior)
     if size < MIN_SIZE_FOR_DENSITY:
@@ -260,14 +299,14 @@ def _list_functions(data: dict, prior: dict[str, dict]) -> list[Signal]:
     if density >= LOW_FUNCTION_DENSITY:
         return []
     return [Signal(
-        f"Only {len(functions)} functions were discovered {PAGE_CAVEAT} in a {size}-byte file, "
+        f"Only {len(functions)} functions were discovered {coverage} in a {size}-byte file, "
         f"far below the density a normally compiled binary shows; code may be packed, "
         f"obfuscated, or generated at runtime.",
         CONFIDENCE_MODERATE,
     )]
 
 
-def _disassemble_function(data: dict, prior: dict[str, dict]) -> list[Signal]:
+def _disassemble_function(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
     mnemonics = [
         instruction.get("mnemonic") or ""
         for instruction in data.get("instructions") or []
@@ -277,12 +316,12 @@ def _disassemble_function(data: dict, prior: dict[str, dict]) -> list[Signal]:
         return []
     return [Signal(
         f"The function at {data.get('function_address')} uses instructions associated with "
-        f"anti-analysis checks {PAGE_CAVEAT}: {', '.join(matched)}.",
+        f"anti-analysis checks {coverage}: {', '.join(matched)}.",
         CONFIDENCE_MODERATE,
     )]
 
 
-def _file_info(data: dict, prior: dict[str, dict]) -> list[Signal]:
+def _file_info(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
     signals = []
     entropy = data.get("entropy") or 0.0
     if entropy >= HIGH_REGION_ENTROPY:
@@ -304,7 +343,7 @@ def _file_info(data: dict, prior: dict[str, dict]) -> list[Signal]:
     return signals
 
 
-NORMALIZERS: dict[str, Callable[[dict, dict[str, dict]], list[Signal]]] = {
+NORMALIZERS: dict[str, Callable[[dict, dict[str, dict], str], list[Signal]]] = {
     "analyze_pe": _analyze_pe,
     "detect_packer": _detect_packer,
     "list_imports": _list_imports,
@@ -341,12 +380,12 @@ def _is_known(name: str, vocabulary: frozenset[str]) -> bool:
     )
 
 
-def _remainder(total: int, what: str) -> list[Signal]:
+def _remainder(total: int, what: str, coverage: str) -> list[Signal]:
     """Account for rule hits past the cap, so the count is never lost."""
     if total <= MAX_RULE_SIGNALS:
         return []
     return [Signal(
-        f"A further {total - MAX_RULE_SIGNALS} {what} {PAGE_CAVEAT}, beyond the "
+        f"A further {total - MAX_RULE_SIGNALS} {what} {coverage}, beyond the "
         f"{MAX_RULE_SIGNALS} named individually; the full list is in the run trace.",
         CONFIDENCE_RULE_MATCH,
     )]

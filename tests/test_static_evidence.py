@@ -6,13 +6,20 @@ is *named* in the sentence, not that a particular sentence was written.
 
 import pytest
 
+from support import PagedImports, ToolThenReportModel
+
+from mira.agents.static.agent import StaticAgent
 from mira.agents.static.evidence import (
+    CONFIDENCE_WEAK,
     HIGH_REGION_ENTROPY,
     MAX_RULE_SIGNALS,
     PACKED_SECTION_ENTROPY,
     PAGED_CAPABILITIES,
     normalize,
 )
+from mira.core.objective import InvestigationObjective
+from mira.core.state import InvestigationState
+from mira.reasoning.runtime.trace import resolve_observation
 
 
 def ok(data: dict) -> dict:
@@ -191,16 +198,95 @@ def test_confidence_is_in_range_without_relying_on_the_clamp(capability, result,
         assert 0.0 <= signal.confidence <= 1.0
 
 
+def signalling(capability):
+    return next(result for name, result, _, _ in SIGNALS if name == capability)
+
+
 @pytest.mark.parametrize("capability", sorted(PAGED_CAPABILITIES))
-def test_paginated_evidence_says_it_covers_only_the_returned_page(capability):
-    result, expected = next(
-        (result, expected) for name, result, expected, _ in SIGNALS if name == capability
-    )
+def test_paginated_evidence_names_how_much_of_the_list_it_covers(capability):
+    result = {**signalling(capability), "metadata": {"offset": 0, "total": 500}}
+
     signals = normalize(capability, result, PRIOR)
 
     assert signals
     for signal in signals:
+        assert "of 500" in signal.observation and "fetched" in signal.observation
+
+
+@pytest.mark.parametrize("capability", sorted(PAGED_CAPABILITIES))
+def test_a_page_without_totals_claims_only_the_returned_page(capability):
+    for signal in normalize(capability, signalling(capability), PRIOR):
         assert "returned page" in signal.observation
+
+
+# --- Import evidence covers the whole collected list (R14, R16) ------------
+
+
+def imports_result(names, total=None, offset=0):
+    imports = [
+        {"dll": "kernel32.dll", "name": name, "ordinal": None if name else 7, "address": index}
+        for index, name in enumerate(names)
+    ]
+    total = len(imports) if total is None else total
+    return {"status": "ok", "data": {"imports": imports},
+            "metadata": {"offset": offset, "total": total, "fetched": len(imports), "unfetched": total - len(imports)}}
+
+
+def late_injection(count=2000, at=1500):
+    names = [f"Fn{index}" for index in range(count)]
+    names[at] = "VirtualAllocEx"
+    return names
+
+
+def test_an_import_deep_in_a_collected_list_is_evidence():
+    signals = normalize("list_imports", imports_result(late_injection()), {})
+
+    injection = [signal.observation for signal in signals if "process injection" in signal.observation]
+    assert injection and "VirtualAllocEx" in injection[0]
+    assert "among all 2000 imports" in injection[0]
+
+
+def test_a_truncated_list_names_what_was_fetched_and_the_total():
+    signals = normalize("list_imports", imports_result(["VirtualAllocEx", "Fn1"], total=8214), {})
+
+    assert "within the first 2 of 8214 imports fetched" in signals[0].observation
+
+
+def test_a_list_fetched_from_an_offset_says_where_it_starts():
+    signals = normalize("list_imports", imports_result(["VirtualAllocEx"], total=8214, offset=500), {})
+
+    assert "1 of 8214 imports fetched from offset 500" in signals[0].observation
+
+
+def test_nameless_imports_are_counted_as_ordinal_only():
+    signals = normalize("list_imports", imports_result([None, None, None, "GetTickCount"]), {})
+
+    assert len(signals) == 1
+    assert "3 of" in signals[0].observation and "ordinal" in signals[0].observation
+
+
+def test_run_time_api_resolution_is_weak_evidence():
+    signals = normalize("list_imports", imports_result(["GetProcAddress", "LoadLibraryA"]), {})
+
+    assert len(signals) == 1
+    assert "GetProcAddress" in signals[0].observation and "LoadLibraryA" in signals[0].observation
+    assert signals[0].confidence == CONFIDENCE_WEAK
+
+
+async def test_collected_evidence_resolves_to_the_collected_call(tmp_path):
+    imports = imports_result(late_injection())["data"]["imports"]
+    objective = InvestigationObjective(
+        name="Assess imports", description="d", reason="test", capabilities=("list_imports",)
+    )
+    agent = StaticAgent(PagedImports(0, imports=imports), model=ToolThenReportModel("list_imports"), trace_dir=tmp_path)
+    state = InvestigationState()
+
+    await agent.investigate(objective, "sample-1", state=state)
+
+    item = next(item for item in state.evidence if "VirtualAllocEx" in item.observation)
+    observation = resolve_observation(tmp_path, item.provenance)
+    assert observation["call"]["name"] == "list_imports"
+    assert len(observation["result"]["output"]["data"]["imports"]) == 2000
 
 
 def test_each_yara_rule_match_is_its_own_evidence():
