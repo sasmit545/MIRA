@@ -475,20 +475,49 @@ def test_closing_an_unknown_identifier_is_rejected():
     from mira.reasoning.runtime.narrative import apply_narrative
 
     memory = WorkingMemory()
-    assert apply_narrative(memory, notes(hypotheses=[hypothesis()]), []) == ""
+    assert apply_narrative(memory, notes(hypotheses=[hypothesis()]), []) == ("", [])
 
-    failure = apply_narrative(memory, notes(close=["H9"]), [])
+    failure, _ = apply_narrative(memory, notes(close=["H9"]), [])
 
     assert "H9" in failure
     assert [h.id for h in memory.hypotheses] == ["H1"]
 
 
-async def test_a_hypothesis_citing_unknown_evidence_is_rejected_whole(tmp_path):
-    memory = await memory_after(
-        tmp_path, notes(understanding="u", hypotheses=[hypothesis(supporting_evidence=["E7"])])
-    )
+class RecordingModel(ScriptedModel):
+    def __init__(self, *responses):
+        super().__init__(*responses)
+        self.contexts = []
 
-    assert memory.hypotheses == [] and memory.understanding == ""
+    def generate(self, context, tools, force=None):
+        self.contexts.append(context)
+        return super().generate(context, tools, force)
+
+
+async def notes_citing(tmp_path, *refs):
+    update = notes(understanding="u", hypotheses=[hypothesis(supporting_evidence=list(refs))])
+    model = RecordingModel(ModelResponse(tool_calls=[CALL], memory_update=update), ModelResponse(report=REPORT))
+    calls, executor = counting_executor()
+    loop = build_loop(model, tmp_path, tools=[PROBE], executor=executor)
+    result = await loop.run(Objective(description="o"), build_definition(tools=[PROBE]), evidence=gathered("E1"))
+    return loop, result, model.contexts
+
+
+async def test_an_unknown_evidence_id_is_dropped_and_the_rest_of_the_notes_kept(tmp_path):
+    loop, result, contexts = await notes_citing(tmp_path, "E1", "E99")
+
+    (kept,) = result.memory.hypotheses
+    assert kept.supporting_evidence == ["E1"] and result.memory.understanding == "u"
+    assert "E99" in contexts[1] and "dropped" in contexts[1]
+    assert loop.completion.memory_rejections == 0
+
+
+async def test_a_hypothesis_citing_only_unknown_evidence_is_kept_unsupported(tmp_path):
+    loop, result, contexts = await notes_citing(tmp_path, "E98", "E99")
+
+    (kept,) = result.memory.hypotheses
+    assert kept.supporting_evidence == []
+    assert "E98, E99" in contexts[1]
+    assert loop.completion.memory_rejections == 0
 
 
 async def test_empty_collections_are_accepted_and_change_nothing(tmp_path):

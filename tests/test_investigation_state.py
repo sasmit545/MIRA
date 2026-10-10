@@ -317,13 +317,23 @@ async def test_the_assessment_names_hypotheses_unknowns_and_open_questions(tmp_p
 
 async def test_a_degraded_run_deposits_evidence_but_no_hypotheses(tmp_path):
     state = InvestigationState()
-    bad = ModelResponse(memory_update=notes({"id": "H1", "supporting_evidence": ["E99"]}))
+    bad = ModelResponse(memory_update=notes({"id": "H1", "confidence": "very"}))
 
     _, finding = await run_notes(tmp_path, state, REPORTED[0], bad)
 
     assert finding.assessment.startswith("inconclusive:")
     assert len(state.evidence) == 1
     assert state.hypotheses == []
+
+
+async def test_a_promoted_hypothesis_cites_only_resolvable_evidence(tmp_path):
+    state = InvestigationState()
+    citing = notes({"id": "H1", "statement": "Packed.", "confidence": 0.6, "status": "supported",
+                    "supporting_evidence": ["E1", "E99"]})
+
+    await run_notes(tmp_path, state, REPORTED[0], ModelResponse(memory_update=citing), REPORTED[2])
+
+    assert state.get_hypothesis_by_id("H1").supporting_evidence == ["E1"]
 
 
 async def test_a_run_out_of_turns_promotes_nothing(tmp_path):

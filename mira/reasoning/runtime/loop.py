@@ -317,9 +317,20 @@ class AgentLoop:
                 "empty lists are accepted when nothing changed."
             )
         else:
-            failure = apply_narrative(
+            failure, warnings = apply_narrative(
                 state.working_memory, update, {item.id for item in state.evidence}
             )
+            if warnings and not failure:
+                # Merged, so not a rejection; said once so the model does not
+                # believe a dropped citation stands.
+                state.record_harness_observation(
+                    ToolCall(tool_call_id=MEMORY_TOOL_CALL_ID, name=MEMORY_TOOL_CALL_ID, arguments={}),
+                    ToolResult(
+                        tool_call_id=MEMORY_TOOL_CALL_ID,
+                        success=False,
+                        error=f"Notes merged, except: {'; '.join(warnings)}. Cite only identifiers listed in the context.",
+                    ),
+                )
         if failure:
             self.completion.record_memory_rejection()
             state.record_harness_observation(

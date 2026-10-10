@@ -175,8 +175,8 @@ async def test_every_cited_evidence_id_resolves_including_after_a_recall(tmp_pat
     assert [item.provenance for item in url_evidence] == [strings_handle]
 
 
-async def test_citing_an_id_the_run_never_minted_leaves_the_notes_untouched(tmp_path):
-    _, state, _, loop = await run(
+async def test_citing_only_an_id_the_run_never_minted_changes_nothing_and_is_not_a_rejection(tmp_path):
+    model, state, _, loop = await run(
         tmp_path,
         ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes([{
             "id": "H1", "statement": "s", "confidence": 0.5, "status": "open", "supporting_evidence": ["E1"],
@@ -185,8 +185,9 @@ async def test_citing_an_id_the_run_never_minted_leaves_the_notes_untouched(tmp_
         ModelResponse(report=REPORT),
     )
 
-    assert loop.completion.memory_rejections == 1
+    assert loop.completion.memory_rejections == 0  # KTD11: dropped, not rejected
     assert state.working_memory.hypotheses[0].supporting_evidence == ["E1"]
+    assert "dropped E9" in model.contexts[2]
 
 
 # --- The rejection bound ends in one report-only turn, not in nothing

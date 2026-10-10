@@ -45,8 +45,8 @@ def test_a_misnamed_text_field_is_coerced_not_rejected():
         return {"understanding": "", "hypotheses": [], "open_questions": [], "candidates": candidates}
 
     memory = WorkingMemory()
-    assert apply_narrative(memory, update([{"id": "C1", "question": "Check the overlay."}]), set()) == ""
+    assert apply_narrative(memory, update([{"id": "C1", "question": "Check the overlay."}]), set()) == ("", [])
     assert memory.candidates[0].investigation == "Check the overlay."
 
     two = [{"id": "C2", "question": "a", "description": "b"}]
-    assert "candidates[0].investigation must be a non-empty string" in apply_narrative(memory, update(two), set())
+    assert "candidates[0].investigation must be a non-empty string" in apply_narrative(memory, update(two), set())[0]
