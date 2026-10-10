@@ -28,8 +28,19 @@ class State:
     # Recall answers from this turn, shown in the next prompt only (KTD10). The
     # prompt is rebuilt from state each turn, so this is the only way one lands.
     recalled: List[str] = field(default_factory=list)
+    # Run counters the benchmark reads from the metadata (R19).
+    model_calls: int = 0
+    recalls_requested: int = 0
+    repeat_recalls: int = 0
+    reruns_refused: int = 0
+    findings_discarded: int = 0
+    # Each recall's normalized arguments, mapped to the turn that first asked it.
+    recall_fingerprints: Dict[str, int] = field(default_factory=dict)
 
     def record_usage(self, usage: Optional[Dict[str, int]]) -> None:
+        """Called once per model response, so it also counts the call: a
+        provider that reports no usage still cost one."""
+        self.model_calls += 1
         if usage is None:
             return
         self.total_prompt_tokens += usage.get("prompt_tokens", 0)

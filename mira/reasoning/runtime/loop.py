@@ -120,6 +120,12 @@ class AgentLoop:
                 if tool_call.name == RECALL_TOOL_NAME:
                     # Harness, not a capability (KTD7): off-budget, owes no notes.
                     recalls += 1
+                    state.recalls_requested += 1
+                    fingerprint = _fingerprint(tool_call.arguments)
+                    if fingerprint in state.recall_fingerprints:
+                        state.repeat_recalls += 1
+                    else:
+                        state.recall_fingerprints[fingerprint] = state.turn_count + 1
                     recalled_handles.append(tool_call.arguments.get("handle"))
                     state.recalled.append(
                         _recall(state, tool_call.arguments)
@@ -129,6 +135,7 @@ class AgentLoop:
                     continue
                 prior = _prior_success(state, tool_call)
                 if prior is not None:
+                    state.reruns_refused += 1
                     # Capabilities are deterministic over one sample: rerunning an
                     # identical call buys the same result and a duplicate evidence id.
                     state.record_harness_observation(
@@ -282,6 +289,7 @@ class AgentLoop:
         dropped = len(payload["findings"]) - len(kept)
         if not dropped:
             return None
+        state.findings_discarded += dropped
         salvaged = {
             **payload,
             "findings": kept,
@@ -417,6 +425,11 @@ class AgentLoop:
             "prompt_tokens": state.total_prompt_tokens,
             "completion_tokens": state.total_completion_tokens,
             "total_tokens": state.total_tokens,
+            "model_calls": state.model_calls,
+            "recalls_requested": state.recalls_requested,
+            "repeat_recalls": state.repeat_recalls,
+            "reruns_refused": state.reruns_refused,
+            "findings_discarded": state.findings_discarded,
         }
 
     def _completion_reason(self, state: State, agent_def: AgentDefinition) -> str:
@@ -436,6 +449,11 @@ def _prior_success(state: State, call: ToolCall) -> Optional[str]:
         if record.success and record.name == call.name and record.arguments == call.arguments:
             return record.handle
     return None
+
+
+def _fingerprint(arguments: dict) -> str:
+    """One recall's identity, independent of argument order."""
+    return json.dumps(arguments, sort_keys=True, default=str)
 
 
 def _recall(state: State, arguments: dict) -> str:

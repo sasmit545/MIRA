@@ -550,3 +550,77 @@ async def test_a_rejection_is_announced_to_the_observer(tmp_path):
     await loop.run(Objective(description="o"), build_definition(tools=[PROBE]))
 
     assert [e["kind"] for e in events] == ["tool_calls", "notes", "tool_calls", "memory_rejected", "report"]
+
+
+# --- Run counters feed the benchmark (R19) -------------------------------
+
+
+def recall_probe(**arguments):
+    handle = "test#probe#0"
+    return ToolCall(tool_call_id="r", name="recall_observation", arguments={"handle": handle, **arguments})
+
+
+async def test_counters_report_model_calls_and_recalls(tmp_path):
+    _, result, _ = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL, NEXT_CALL], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_probe()]),
+        ModelResponse(report=REPORT),
+    )
+
+    assert result.metadata["model_calls"] == 3
+    assert result.metadata["recalls_requested"] == 1
+    assert result.metadata["repeat_recalls"] == 0
+
+
+async def test_a_forced_notes_call_counts_as_a_model_call_without_usage(tmp_path):
+    _, result, _ = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update=NOTES),
+        ModelResponse(tool_calls=[NEXT_CALL]),  # owes notes: one forced call, declined
+        ModelResponse(report=REPORT),
+    )
+
+    assert result.metadata["model_calls"] == 4
+    assert result.metadata["total_tokens"] == 0
+
+
+async def test_an_identical_recall_is_counted_as_a_repeat(tmp_path):
+    _, result, _ = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_probe()]),
+        ModelResponse(tool_calls=[recall_probe()], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+
+    assert result.metadata["recalls_requested"] == 2
+    assert result.metadata["repeat_recalls"] == 1
+
+
+async def test_a_refused_rerun_is_counted(tmp_path):
+    _, result, _ = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update=NOTES),
+        ModelResponse(tool_calls=[CALL], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+
+    assert result.metadata["reruns_refused"] == 1
+
+
+async def test_a_salvaged_report_counts_its_discarded_findings(tmp_path):
+    unsupported = {**FINDING, "evidence_refs": ["E99"]}
+    salvaged = json.dumps({"summary": "s", "verdict": "suspicious", "findings": [FINDING, unsupported]})
+    calls, executor = counting_executor()
+    loop = build_loop(
+        ScriptedModel(ModelResponse(tool_calls=[CALL], memory_update=NOTES), ModelResponse(report=salvaged)),
+        tmp_path, tools=[PROBE], executor=executor,
+    )
+
+    result = await loop.run(
+        Objective(description="o"), build_definition(tools=[PROBE], max_turns=1), evidence=gathered("E1")
+    )
+
+    assert len(result.findings) == 1
+    assert result.metadata["findings_discarded"] == 1
