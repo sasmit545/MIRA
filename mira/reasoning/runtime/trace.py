@@ -9,11 +9,10 @@ from typing import Iterable, Iterator, List, Dict, Any, Optional, Tuple
 from ..contracts.tool import ToolCall, ToolResult
 from ..contracts.model import ModelResponse
 from ..contracts.state import State
+from .payload import MAX_DIGEST_CHARS, MAX_OBSERVATION_CHARS, digest, truncate  # noqa: F401 - re-exported
 
 
 PROVENANCE_SEPARATOR = "#"
-MAX_OBSERVATION_CHARS = 2000
-MAX_DIGEST_CHARS = 4000
 
 
 def trace_provenance(run_id: str, capability: str, occurrence: int) -> str:
@@ -94,10 +93,16 @@ class CapabilityRecord:
     success: bool
     error: Optional[str]
     digest: str  # empty for a failure: the error is what it produced
+    evidence: Tuple[str, ...] = ()  # ids minted from this call: what the specialist read out of it
 
 
 def capability_history(state: State) -> List[CapabilityRecord]:
     """Every capability call this run made, in order, each with its handle."""
+    minted: Dict[str, List[str]] = {}
+    for item in state.evidence:
+        provenance = getattr(item, "provenance", None)
+        if provenance:
+            minted.setdefault(provenance, []).append(item.id)
     return [
         CapabilityRecord(
             handle=trace_provenance(state.run_id, name, occurrence),
@@ -106,25 +111,10 @@ def capability_history(state: State) -> List[CapabilityRecord]:
             success=result.success,
             error=result.error,
             digest=digest(result.output) if result.success else "",
+            evidence=tuple(minted.get(trace_provenance(state.run_id, name, occurrence), ())),
         )
         for name, occurrence, call, result in _numbered(_live_pairs(state))
     ]
-
-
-def digest(output: Any, limit: int = MAX_DIGEST_CHARS) -> str:
-    """A bounded, code-derived summary of a successful result (R20).
-
-    Exists so a call that minted no evidence still leaves the model something
-    to reason from. Deterministic: sorted keys, anything unserializable repr'd.
-    """
-    return truncate(json.dumps(output, sort_keys=True, default=repr), limit)
-
-
-def truncate(text: str, limit: int = MAX_OBSERVATION_CHARS) -> str:
-    """Cap a rendered payload so one tool result cannot fill the context window."""
-    if len(text) <= limit:
-        return text
-    return f"{text[:limit]}... [truncated, {len(text) - limit} more characters]"
 
 
 def _parse_provenance(provenance: str) -> Optional[Tuple[str, str, int]]:

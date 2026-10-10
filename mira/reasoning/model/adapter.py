@@ -21,6 +21,7 @@ MAX_TOKENS = 16384
 
 REPORT_TOOL = "submit_report"
 MEMORY_TOOL = "record_memory"
+RECALL_TOOL = "recall_observation"  # rides tool_calls; the loop intercepts it by name
 
 
 class ModelAdapter:
@@ -135,6 +136,7 @@ def declarations(tools: List[Any]) -> list[dict]:
         for spec in tools
     ]
     declared.append(_memory_declaration())
+    declared.append(_recall_declaration())
     declared.append(
         {
             "name": REPORT_TOOL,
@@ -259,6 +261,47 @@ def _memory_declaration() -> dict:
                 },
             },
             "required": ["understanding", "hypotheses", "open_questions", "candidates"],
+        },
+    }
+
+
+def _recall_declaration() -> dict:
+    """Retrieval of what a digest left out. Harness, not a capability: it reads
+    results already gathered and never touches the sample."""
+    return {
+        "name": RECALL_TOOL,
+        "description": (
+            "Read part of an earlier capability result that its digest in the capability "
+            "history left out. The answer appears in your next turn only, so record what "
+            "matters in record_memory. Does not use the tool-call budget. With only a "
+            "handle, returns the whole result if it is small. To read a large array, give "
+            "a range (start, count) or search it (contains); for example search "
+            "data.strings with contains [\"http\", \"://\"] for URL-like strings. Ranges "
+            "and search apply to arrays only."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "handle": {
+                    "type": "string",
+                    "description": "The call's handle exactly as listed in the capability history (run#capability#n).",
+                },
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Dotted path inside the result, such as data.strings or data.sections.2. "
+                        "Optional when the result holds exactly one array and you give start, count or contains."
+                    ),
+                },
+                "start": {"type": "integer", "minimum": 0, "description": "First array index to return. Default 0."},
+                "count": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Most items to return. Default 50."},
+                "contains": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Return only array items whose text contains any of these, ignoring case. Plain text, not regex.",
+                },
+            },
+            "required": ["handle"],
         },
     }
 

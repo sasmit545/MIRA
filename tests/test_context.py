@@ -58,7 +58,7 @@ def test_context_reports_an_empty_history():
     assert "no tools have been called yet" in context
 
 
-def test_context_includes_tool_results():
+def test_context_shows_each_call_by_handle_with_its_digest():
     state = build_state()
     state.record_tool_call(ToolCall(tool_call_id="1", name="file_info", arguments={}))
     state.record_tool_result(
@@ -67,8 +67,8 @@ def test_context_includes_tool_results():
 
     context = ContextBuilder.build(state, build_definition())
 
-    assert "file_info" in context
-    assert "'size': 4" in context
+    assert "[test_run#file_info#0] file_info()" in context
+    assert '{"size": 4}' in context  # a small result's digest is the whole result
 
 
 def test_context_includes_tool_errors():
@@ -83,17 +83,49 @@ def test_context_includes_tool_errors():
     assert "ERROR: it broke" in context
 
 
-def test_long_results_are_truncated():
+def test_a_large_result_is_digested_not_dumped():
     state = build_state()
+    page = [{"value": f"string-{index}", "offset": index} for index in range(1000)]
     state.record_tool_call(ToolCall(tool_call_id="1", name="file_info", arguments={}))
     state.record_tool_result(
-        ToolResult(tool_call_id="1", success=True, output="A" * 10_000)
+        ToolResult(tool_call_id="1", success=True, output={"status": "ok", "data": {"strings": page}})
     )
 
     context = ContextBuilder.build(state, build_definition())
 
-    assert "truncated" in context
-    assert len(context) < 10_000
+    assert "partial digest" in context
+    assert "data.strings (1000)" in context
+    assert "string-999" in context  # the last item is sampled, not only the first
+    assert "string-500" not in context
+    assert len(context) < 6_000
+
+
+def test_a_harness_note_is_shown_without_a_handle():
+    state = build_state()
+    state.record_harness_observation(
+        ToolCall(tool_call_id="dup", name="file_info", arguments={}),
+        ToolResult(tool_call_id="dup", success=False, error="Not rerun"),
+    )
+
+    context = ContextBuilder.build(state, build_definition())
+
+    assert "- file_info()" in context
+    assert "ERROR: Not rerun" in context
+    assert "#file_info#" not in context
+
+
+def test_a_recall_is_rendered_in_its_own_section():
+    state = build_state()
+    state.recalled.append("recall_observation(handle='x'):\nanswer-text")
+
+    context = ContextBuilder.build(state, build_definition())
+
+    assert "Recalled this turn" in context
+    assert "answer-text" in context
+
+
+def test_the_instructions_say_how_to_read_past_a_digest():
+    assert "recall_observation" in ContextBuilder.build(build_state(), build_definition())
 
 
 def test_truncate_leaves_short_text_alone():

@@ -14,11 +14,14 @@ from ..model.adapter import ModelAdapter
 from .completion import MAX_MEMORY_REJECTIONS, CompletionChecker
 from .context import ContextBuilder
 from .narrative import apply_narrative
+from .payload import select
 from .tool_runtime import ToolRuntime
-from .trace import Tracer
+from .trace import Tracer, capability_history, live_observation
 
 REPORT_TOOL_CALL_ID = "submit_report"
 MEMORY_TOOL_CALL_ID = "record_memory"
+RECALL_TOOL_NAME = "recall_observation"
+MAX_RECALLS_PER_TURN = 3
 
 
 class AgentLoop:
@@ -78,6 +81,8 @@ class AgentLoop:
     async def _run(self, state: State, agent_def: AgentDefinition) -> FinalOutput:
         while self.completion.is_active(state, agent_def):
             context_str = self.context.build(state, agent_def)
+            # Shown in exactly this one prompt; this turn's recalls replace them.
+            state.recalled = []
             available_tools: List[ToolSpec] = agent_def.allowed_tools
 
             response: ModelResponse = self.model.generate(
@@ -100,7 +105,17 @@ class AgentLoop:
             # discard work already requested.
             calls: list[ToolCall] = []
             results: list[ToolResult] = []
+            recalls = 0
             for tool_call in response.tool_calls or []:
+                if tool_call.name == RECALL_TOOL_NAME:
+                    # Harness, not a capability (KTD7): off-budget, owes no notes.
+                    recalls += 1
+                    state.recalled.append(
+                        _recall(state, tool_call.arguments)
+                        if recalls <= MAX_RECALLS_PER_TURN
+                        else f"Recall not served: at most {MAX_RECALLS_PER_TURN} per turn."
+                    )
+                    continue
                 prior = _prior_success(state, tool_call)
                 if prior is not None:
                     # Capabilities are deterministic over one sample: rerunning an
@@ -110,7 +125,7 @@ class AgentLoop:
                         ToolResult(
                             tool_call_id=tool_call.tool_call_id,
                             success=False,
-                            error=f"Not rerun: identical to history [{prior}]; use that result.",
+                            error=f"Not rerun: identical to {prior}; use that result, or recall_observation for more of it.",
                         ),
                     )
                     continue
@@ -277,19 +292,34 @@ class AgentLoop:
         return "limit_turns"
 
 
-def _prior_success(state: State, call: ToolCall) -> Optional[int]:
-    """History index of an earlier successful call with the same name and
-    arguments. Failures are not matched: they may be transient and worth a retry."""
-    for index, observation in enumerate(state.observations):
-        past, result = observation["call"], observation["result"]
-        if (
-            result is not None
-            and result.success
-            and past.name == call.name
-            and past.arguments == call.arguments
-        ):
-            return index
+def _prior_success(state: State, call: ToolCall) -> Optional[str]:
+    """Handle of an earlier successful call with the same name and arguments.
+    Failures are not matched: they may be transient and worth a retry."""
+    for record in capability_history(state):
+        if record.success and record.name == call.name and record.arguments == call.arguments:
+            return record.handle
     return None
+
+
+def _recall(state: State, arguments: dict) -> str:
+    """Answer one recall_observation, success or failure, as prompt text."""
+    asked = ", ".join(f"{name}={value!r}" for name, value in arguments.items())
+    handle = arguments.get("handle")
+    if not isinstance(handle, str) or not handle:
+        return f"recall_observation({asked}) failed: handle is required, copied from the capability history."
+    observation = live_observation(state, handle)
+    if observation is None:
+        return (
+            f"recall_observation({asked}) failed: no capability call in this run has "
+            f"handle {handle!r}; use one listed in the capability history."
+        )
+    result = observation["result"]
+    if not result.success:
+        return f"recall_observation({asked}): that call failed, and its error is all it produced: {result.error}"
+    text, failure = select(result.output, arguments)
+    if failure:
+        return f"recall_observation({asked}) failed: {failure}"
+    return f"recall_observation({asked}):\n{text}"
 
 
 # --- Report validation.

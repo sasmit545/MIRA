@@ -25,6 +25,9 @@ class State:
     evidence: List[Any] = field(default_factory=list)  # Curated subset of observations
     observations: List[Dict[str, Any]] = field(default_factory=list)  # Each observation: {'call': ToolCall, 'result': ToolResult}
     working_memory: WorkingMemory = field(default_factory=WorkingMemory)
+    # Recall answers from this turn, shown in the next prompt only (KTD10). The
+    # prompt is rebuilt from state each turn, so this is the only way one lands.
+    recalled: List[str] = field(default_factory=list)
 
     def record_usage(self, usage: Optional[Dict[str, int]]) -> None:
         if usage is None:

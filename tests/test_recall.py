@@ -1,0 +1,343 @@
+"""A digest stays small without hiding the rest: recall_observation reaches any
+part of a full result by handle, range or search."""
+
+import json
+
+import pytest
+
+from mira.reasoning.contracts.model import ModelResponse
+from mira.reasoning.contracts.objective import Objective
+from mira.reasoning.contracts.output import FinalOutput
+from mira.reasoning.contracts.state import State
+from mira.reasoning.contracts.tool import ToolCall, ToolResult, ToolSpec
+from mira.reasoning.definition.agent import AgentDefinition
+from mira.reasoning.runtime.completion import CompletionChecker
+from mira.reasoning.runtime.context import ContextBuilder
+from mira.reasoning.runtime.loop import MAX_RECALLS_PER_TURN, AgentLoop, _recall
+from mira.reasoning.runtime.payload import (
+    MAX_DIGEST_CHARS,
+    MAX_RECALL_CHARS,
+    PARTIAL_MARKER,
+    digest,
+    select,
+)
+from mira.reasoning.runtime.tool_runtime import ToolRuntime
+from mira.reasoning.runtime.trace import (
+    Tracer,
+    capability_history,
+    live_observation,
+    resolve_observation,
+    trace_provenance,
+)
+
+NOTES = {"understanding": "", "hypotheses": [], "open_questions": [], "candidates": []}
+REPORT = '{"summary": "done", "verdict": "suspicious", "findings": []}'
+URL = "http://evil.example/stage2.bin"
+LATE = 990  # well past the first 4,000 serialized characters
+
+
+def strings_page(size=1000, late=LATE):
+    strings = [{"value": f"benign_string_{index:04d}", "offset": index * 16, "encoding": "ascii"} for index in range(size)]
+    if late is not None:
+        strings[late] = {"value": URL, "offset": late * 16, "encoding": "ascii"}
+    return {
+        "status": "ok",
+        "data": {"strings": strings, "offset": 0},
+        "metadata": {"capability": "extract_strings", "limit": size, "offset": 0, "has_more": False},
+    }
+
+
+PAGE = strings_page()
+
+
+def test_the_indicator_sits_beyond_the_old_prefix_boundary():
+    """Guards the regression's premise: a 4,000-character prefix never saw it."""
+    assert URL not in json.dumps(PAGE, sort_keys=True)[:4000]
+
+
+# --- Digest
+
+
+def test_a_large_digest_is_bounded_and_says_it_is_partial():
+    text = digest(PAGE)
+
+    assert len(text) <= MAX_DIGEST_CHARS + len(PARTIAL_MARKER) + 80
+    assert text.endswith(PARTIAL_MARKER)
+    assert "data.strings (1000)" in text
+    assert "[1000 items:" in text
+
+
+def test_a_digest_samples_both_ends_of_an_array():
+    text = digest(PAGE)
+
+    assert "benign_string_0000" in text
+    assert "benign_string_0999" in text
+
+
+def test_a_short_array_is_shown_in_full():
+    sections = {"data": {"sections": [{"name": name, "entropy": 7.9, "raw_size": 512, "virtual_size": 512} for name in (".text", ".rdata", ".data", "UPX0", "UPX1")]}}
+
+    text = digest(sections)
+
+    assert all(name in text for name in (".text", ".rdata", ".data", "UPX0", "UPX1"))
+    assert PARTIAL_MARKER not in text
+
+
+def test_a_small_result_digest_is_whole_and_not_marked_partial():
+    small = {"status": "ok", "data": {"packed": True, "packer": "UPX"}}
+
+    text = digest(small)
+
+    assert PARTIAL_MARKER not in text
+    assert '"packer": "UPX"' in text
+
+
+def test_a_digest_does_not_alter_the_result():
+    page = strings_page()
+    before = json.dumps(page, sort_keys=True)
+
+    digest(page)
+
+    assert json.dumps(page, sort_keys=True) == before
+
+
+# --- Selection
+
+
+def test_search_finds_an_indicator_late_in_a_large_array():
+    text, failure = select(PAGE, {"contains": ["://"]})
+
+    assert failure == ""
+    assert f"[{LATE}]" in text and URL in text
+    assert "1 of 1000 items" in text
+
+
+def test_search_is_case_insensitive_and_respects_count():
+    text, failure = select(PAGE, {"path": "data.strings", "contains": ["BENIGN_STRING_00"], "count": 5})
+
+    assert failure == ""
+    assert "100 of 1000 items" in text
+    assert text.count("\n[") == 5
+    assert "continue with start=5" in text
+
+
+def test_a_range_returns_exactly_the_requested_items():
+    text, _ = select(PAGE, {"path": "data.strings", "start": 10, "count": 3})
+
+    assert "items 10..12 of 1000" in text
+    assert [line.split("]")[0] for line in text.splitlines()[1:]] == ["[10", "[11", "[12"]
+    assert "continue with start=13" in text
+
+
+def test_a_range_at_the_end_returns_only_what_exists():
+    text, failure = select(PAGE, {"path": "data.strings", "start": 998, "count": 50})
+
+    assert failure == ""
+    assert "items 998..999 of 1000" in text
+    assert "continue" not in text
+
+
+def test_the_character_limit_stops_a_range_with_a_continuation():
+    wide = {"data": {"rows": ["x" * 1000 for _ in range(50)]}}
+
+    text, failure = select(wide, {"path": "data.rows", "count": 50})
+
+    assert failure == ""
+    assert len(text) < MAX_RECALL_CHARS + 500
+    assert "stopped at item" in text and "continue with start=" in text
+
+
+def test_a_small_object_is_returned_whole():
+    text, failure = select(PAGE, {"path": "metadata"})
+
+    assert failure == ""
+    assert '"has_more": false' in text
+
+
+@pytest.mark.parametrize(
+    "arguments, expected",
+    [
+        ({"path": "data.strings", "start": 1000}, "past the end"),
+        ({"path": "data.strings", "start": -1}, "start must be an integer"),
+        ({"path": "data.strings", "start": True}, "start must be an integer"),
+        ({"path": "data.strings", "count": 0}, "count must be an integer between 1 and 200"),
+        ({"path": "data.strings", "count": 201}, "count must be an integer between 1 and 200"),
+        ({"path": "data.strings", "contains": []}, "contains must be"),
+        ({"path": "data.strings", "contains": [""]}, "contains must be"),
+        ({"path": "data.nope"}, "'nope' is not in data; its keys are ['offset', 'strings']"),
+        ({"path": "data.strings.5000"}, "array of 1000 items"),
+        ({"path": "metadata", "start": 0}, "metadata is not an array"),
+        ({"path": ""}, "path must be a dotted path"),
+    ],
+)
+def test_invalid_selectors_fail_with_a_clear_reason(arguments, expected):
+    text, failure = select(PAGE, arguments)
+
+    assert text == ""
+    assert expected in failure
+
+
+def test_a_whole_result_too_large_to_return_names_its_arrays():
+    _, failure = select(PAGE, {})
+
+    assert "over the 6000-character recall limit" in failure
+    assert "data.strings (1000 items)" in failure
+
+
+def test_an_ambiguous_array_needs_a_path():
+    two = {"data": {"imports": [1, 2], "exports": [3]}}
+
+    _, failure = select(two, {"start": 0})
+
+    assert "give a path" in failure
+
+
+# --- Handles, live and traced
+
+RUN = "recall_run"
+
+
+def _state():
+    state = State(objective=Objective(description="test"), run_id=RUN)
+
+    def call(name, output=None, error=None):
+        tool_call = ToolCall(tool_call_id=f"c{len(state.observations)}", name=name, arguments={})
+        state.record_tool_call(tool_call)
+        state.record_tool_result(ToolResult(tool_call.tool_call_id, success=error is None, output=output, error=error))
+
+    call("extract_strings", error="TIMEOUT: too slow")
+    call("extract_strings", output=PAGE)
+    call("list_imports", output={"status": "ok", "data": {"imports": []}})
+    call("extract_strings", output=strings_page(late=None))
+    return state
+
+
+def test_repeated_and_failed_calls_keep_distinct_handles_for_recall():
+    state = _state()
+
+    failed = _recall(state, {"handle": trace_provenance(RUN, "extract_strings", 0)})
+    found = _recall(state, {"handle": trace_provenance(RUN, "extract_strings", 1), "contains": ["evil"]})
+    clean = _recall(state, {"handle": trace_provenance(RUN, "extract_strings", 2), "contains": ["evil"]})
+
+    assert "that call failed" in failed and "TIMEOUT" in failed
+    assert URL in found
+    assert "0 of 1000 items" in clean
+
+
+@pytest.mark.parametrize(
+    "arguments, expected",
+    [
+        ({}, "handle is required"),
+        ({"handle": 7}, "handle is required"),
+        ({"handle": "recall_run#extract_strings#9"}, "no capability call in this run"),
+        ({"handle": "other_run#extract_strings#1"}, "no capability call in this run"),
+        ({"handle": "garbage"}, "no capability call in this run"),
+        ({"handle": "recall_run#extract_strings#1", "count": "ten"}, "count must be an integer"),
+    ],
+)
+def test_a_bad_recall_is_an_explicit_failure(arguments, expected):
+    answer = _recall(_state(), arguments)
+
+    assert "failed" in answer and expected in answer
+
+
+def test_recall_reads_the_same_observation_live_and_from_the_trace(tmp_path):
+    state = _state()
+    tracer = Tracer(RUN, str(tmp_path))
+    for observation in state.observations:
+        tracer.turn("", ModelResponse(), [observation["call"]], [observation["result"]], {})
+    tracer.save()
+
+    for record in capability_history(state):
+        if not record.success:
+            continue
+        arguments = {"start": 985, "count": 10} if record.name == "extract_strings" else {}
+        live = select(live_observation(state, record.handle)["result"].output, arguments)
+        traced = select(resolve_observation(tmp_path, record.handle)["result"]["output"], arguments)
+        assert live == traced
+
+
+# --- Through the loop
+
+
+class Recorder:
+    """Plays canned responses and keeps every prompt it was sent."""
+
+    def __init__(self, *responses):
+        self.responses = list(responses)
+        self.contexts = []
+
+    def generate(self, context, tools):
+        self.contexts.append(context)
+        return self.responses[min(len(self.contexts) - 1, len(self.responses) - 1)]
+
+
+def _loop(model, tmp_path, output):
+    spec = ToolSpec(name="extract_strings", description="Extract strings.", parameters={})
+    definition = AgentDefinition(
+        role="You are a test investigator.",
+        scope="Test scope only.",
+        tool_manifest=[spec],
+        allowed_tools=[spec],
+        max_turns=10,
+        max_tool_calls=10,
+        output_contract=FinalOutput,
+    )
+    loop = AgentLoop(
+        model,
+        ToolRuntime([spec], lambda name, arguments: output),
+        CompletionChecker(),
+        ContextBuilder(),
+        Tracer(run_id="loop_run", output_dir=str(tmp_path)),
+    )
+    return loop, definition
+
+
+def recall(**arguments):
+    return ModelResponse(tool_calls=[ToolCall(tool_call_id="r", name="recall_observation", arguments=arguments)])
+
+
+async def test_a_late_indicator_hidden_by_the_digest_is_recalled_for_one_turn(tmp_path):
+    handle = trace_provenance("loop_run", "extract_strings", 0)
+    model = Recorder(
+        ModelResponse(tool_calls=[ToolCall("c1", "extract_strings", {})], memory_update=NOTES),
+        recall(handle=handle, contains=["http"]),
+        ModelResponse(memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+    loop, definition = _loop(model, tmp_path, PAGE)
+
+    result = await loop.run(Objective(description="test"), definition)
+
+    first, recall_turn, after, last = model.contexts
+    assert handle in recall_turn and "partial digest" in recall_turn
+    assert URL not in recall_turn  # the digest alone does not show it
+    assert URL in after  # the turn after the recall does
+    assert URL not in last  # and only that one
+    assert result.completion_reason == "reported"
+    assert result.metadata["tool_calls"] == 1  # recall is off-budget
+    assert loop.completion.memory_rejections == 0  # a recall-only turn owes no notes
+    # The authoritative result is untouched in the trace.
+    traced = resolve_observation(tmp_path, handle)["result"]["output"]
+    assert traced == PAGE
+
+
+async def test_recalls_past_the_per_turn_cap_are_refused(tmp_path):
+    handle = trace_provenance("loop_run", "extract_strings", 0)
+    many = ModelResponse(
+        tool_calls=[
+            ToolCall(f"r{index}", "recall_observation", {"handle": handle, "start": index, "count": 1})
+            for index in range(MAX_RECALLS_PER_TURN + 1)
+        ]
+    )
+    model = Recorder(
+        ModelResponse(tool_calls=[ToolCall("c1", "extract_strings", {})], memory_update=NOTES),
+        many,
+        ModelResponse(report=REPORT),
+    )
+    loop, definition = _loop(model, tmp_path, PAGE)
+
+    await loop.run(Objective(description="test"), definition)
+
+    assert "Recall not served" in model.contexts[2]
+    assert "items 2..2 of 1000" in model.contexts[2]
