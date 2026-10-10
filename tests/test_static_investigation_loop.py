@@ -131,7 +131,9 @@ async def test_a_capability_outside_the_objective_is_refused(tmp_path):
 class SilentModel:
     """Never calls a tool and never reports - the degraded exit."""
 
-    def generate(self, context, tools):
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()  # declines the forced notes call; the script is not consumed
         return ModelResponse()
 
 
@@ -180,7 +182,9 @@ class RepeatingModel:
         self.repeat_notes = repeat_notes
         self.turns = 0
 
-    def generate(self, context, tools):
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()  # declines the forced notes call; the script is not consumed
         self.turns += 1
         call = ToolCall(tool_call_id=str(self.turns), name="file_info", arguments={})
         notes = dict(EMPTY_NOTES) if self.turns == 1 else self.repeat_notes

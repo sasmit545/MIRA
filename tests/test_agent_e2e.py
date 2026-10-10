@@ -39,7 +39,9 @@ class ScriptedModel:
         self.responses = list(responses)
         self.contexts = []
 
-    def generate(self, context, tools):
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()  # declines the forced notes call; the script is not consumed
         self.contexts.append(context)
         index = min(len(self.contexts) - 1, len(self.responses) - 1)
         return self.responses[index]
@@ -221,7 +223,9 @@ class HighVolumeModel:
     def __init__(self):
         self.contexts = []
 
-    def generate(self, context, tools):
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()  # declines the forced notes call; the script is not consumed
         self.contexts.append(context)
         cited = re.findall(r"^\s+(E\d+) \[", context, re.MULTILINE)
         if len(self.contexts) == 1:

@@ -24,6 +24,10 @@ REPORT_TOOL_CALL_ID = "submit_report"
 MEMORY_TOOL_CALL_ID = "record_memory"
 RECALL_TOOL_NAME = "recall_observation"
 MAX_RECALLS_PER_TURN = 3
+FORCED_NOTES_PROMPT = (
+    "Your last response called a capability or followed a recall without record_memory. "
+    "Call record_memory now with what the results above show you (empty lists if nothing changed)."
+)
 
 
 class AgentLoop:
@@ -153,14 +157,20 @@ class AgentLoop:
             # After the calls, so a rejected narrative cannot unwind a result or
             # the evidence minted from it. A report-only turn owes no narrative.
             memory_failure = ""
+            update = response.memory_update
             owes = (calls and notes_owed) or (notes_pending and (calls or recalls))
-            if response.memory_update is not None:
+            # Reading before writing: a turn that recalls may write its notes
+            # next turn instead, but not two turns running.
+            defer = update is None and owes and recalls and not notes_pending
+            if update is None and owes and not defer:
+                # Asking was not enough: a live model skipped record_memory on
+                # nearly every turn. One extra call that must record the notes;
+                # a model that still does not is rejected as before.
+                update = self._forced_notes(state, agent_def)
+            if update is not None:
                 notes_pending = False
-                memory_failure = self._merge_narrative(state, response.memory_update)
-            elif owes and not notes_pending and recalls:
-                # Reading before writing: a turn that recalls may write its notes
-                # next turn instead (a live model skipped them on every such
-                # turn), but not two turns running.
+                memory_failure = self._merge_narrative(state, update)
+            elif defer:
                 notes_pending = True
             elif owes:
                 memory_failure = self._merge_narrative(state, None)
@@ -185,7 +195,7 @@ class AgentLoop:
                 self._notify({"kind": "recall", "turn": state.turn_count + 1, "handles": recalled_handles})
             if memory_failure:
                 self._notify({"kind": "memory_rejected", "turn": state.turn_count + 1, "failure": memory_failure})
-            elif response.memory_update is not None:
+            elif update is not None:
                 # A copy: an observer may keep it after later turns revise the notes.
                 self._notify({"kind": "notes", "turn": state.turn_count + 1, "memory": copy.deepcopy(state.working_memory)})
             if report is not None:
@@ -234,12 +244,15 @@ class AgentLoop:
         )
         context_str = self.context.build(state, agent_def)
         state.recalled = []
-        # No capabilities on offer: the adapter still declares submit_report.
-        response: ModelResponse = self.model.generate(context=context_str, tools=[])
+        response: ModelResponse = self.model.generate(context=context_str, tools=[], force=REPORT_TOOL_CALL_ID)
         state.record_usage(response.usage)
         report, failure = None, "no report was submitted on the final turn"
         if response.report is not None:
             report, failure = self._parse_report(response.report, state, agent_def)
+            if report is None:
+                # No turn follows to fix it in, so keep what is supported rather
+                # than lose the whole report to one uncited finding.
+                report = self._supported_part(response.report, state, agent_def)
         self.tracer.turn(context_str, response, [], [], state.snapshot(), token_usage=response.usage)
         state.turn_count += 1
         if report is None:
@@ -250,6 +263,43 @@ class AgentLoop:
         )
         self._notify({"kind": "report", "turn": state.turn_count, "report": report})
         return report
+
+    def _supported_part(self, raw: str, state: State, agent_def: AgentDefinition) -> Optional[FinalOutput]:
+        """The report with every finding that fails validation removed.
+
+        Each kept finding passes the same check a normal report does, so an
+        unsupported finding never reaches the output. With none left, the
+        verdict cannot stand on anything and becomes inconclusive. None when
+        the report is broken for a reason other than its findings.
+        """
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict) or not isinstance(payload.get("findings"), list):
+            return None
+        kept = [entry for entry in payload["findings"] if _typed_findings([entry], state)[0] is not None]
+        dropped = len(payload["findings"]) - len(kept)
+        if not dropped:
+            return None
+        salvaged = {
+            **payload,
+            "findings": kept,
+            "summary": f"{payload.get('summary', '')} [{dropped} finding(s) without valid evidence references were discarded.]",
+        }
+        if not kept:
+            salvaged["verdict"] = "inconclusive"
+        report, _ = self._parse_report(json.dumps(salvaged), state, agent_def)
+        return report
+
+    def _forced_notes(self, state: State, agent_def: AgentDefinition) -> Optional[dict]:
+        """Ask once more, offering only record_memory and requiring it. The
+        prompt already shows this turn's results, so the notes can cover them."""
+        context_str = self.context.build(state, agent_def) + "\n\n" + FORCED_NOTES_PROMPT
+        response: ModelResponse = self.model.generate(context=context_str, tools=[], force=MEMORY_TOOL_CALL_ID)
+        state.record_usage(response.usage)
+        self.tracer.turn(context_str, response, [], [], state.snapshot(), token_usage=response.usage)
+        return response.memory_update
 
     def _merge_narrative(self, state: State, update: Optional[dict]) -> str:
         """Merge the turn's narrative; on rejection tell the model why."""

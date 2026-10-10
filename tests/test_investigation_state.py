@@ -264,7 +264,9 @@ class NotesModel:
         self.responses = list(responses)
         self.seen = []
 
-    def generate(self, context, tools):
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()  # declines the forced notes call; the script is not consumed
         self.seen.append(len(self.state.hypotheses) if self.state is not None else None)
         return self.responses[min(len(self.seen) - 1, len(self.responses) - 1)]
 

@@ -58,7 +58,9 @@ class ScriptedModel:
         self.responses = list(responses)
         self.calls = 0
 
-    def generate(self, context, tools):
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()  # declines the forced notes call; the script is not consumed
         response = self.responses[min(self.calls, len(self.responses) - 1)]
         self.calls += 1
         return response

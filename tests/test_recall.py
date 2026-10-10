@@ -267,7 +267,9 @@ class Recorder:
         self.responses = list(responses)
         self.contexts = []
 
-    def generate(self, context, tools):
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()  # declines the forced notes call; the script is not consumed
         self.contexts.append(context)
         return self.responses[min(len(self.contexts) - 1, len(self.responses) - 1)]
 

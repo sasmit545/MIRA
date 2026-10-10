@@ -41,7 +41,9 @@ class ToolThenReportModel:
         self.pending = list(tool_names)
         self.offered = []
 
-    def generate(self, context, tools):
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()  # declines the forced notes call; the script is not consumed
         self.offered.append([spec.name for spec in tools])
         if self.pending:
             name = self.pending.pop(0)
@@ -61,7 +63,9 @@ class NoNotesModel:
         self.notes = notes
         self.turns = 0
 
-    def generate(self, context, tools):
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()  # declines the forced notes call; the script is not consumed
         self.turns += 1
         # Fresh arguments each turn, so the harness never refuses it as a rerun.
         call = ToolCall(tool_call_id=str(self.turns), name=self.name, arguments={"offset": self.turns})

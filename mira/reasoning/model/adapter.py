@@ -35,20 +35,23 @@ class ModelAdapter:
         self.model_name = os.getenv("MODEL_NAME", DEFAULT_MODEL)
         self.client = OpenAI(base_url=BASE_URL, api_key=api_key)
 
-    def generate(self, context: str, tools: List[Any]) -> ModelResponse:
-        """Ask the model for its next move as a native tool call."""
+    def generate(self, context: str, tools: List[Any], force: Optional[str] = None) -> ModelResponse:
+        """Ask the model for its next move as a native tool call.
+
+        `force` names one harness tool (submit_report or record_memory): only
+        that tool is declared, and the model must call it.
+        """
         # API failures deliberately propagate. Returning an empty response here
         # is indistinguishable from a model with nothing to say, which hides
         # 404s, auth failures, and quota errors behind a "degraded" exit.
         # The SDK already retries 429s and connection errors on its own.
         declared = declarations(tools)
         extra = {}
-        if not tools:
-            # No capability on offer means the run is ending (the loop's final
-            # report turn): offer only the report, and require it. Left free,
-            # a live model spent that turn on recall_observation instead.
-            declared = [d for d in declared if d["function"]["name"] == REPORT_TOOL]
-            extra["tool_choice"] = {"type": "function", "function": {"name": REPORT_TOOL}}
+        if force is not None:
+            # Left a free choice, a live model spent its final report turn on
+            # recall_observation and skipped record_memory on most turns.
+            declared = [d for d in declared if d["function"]["name"] == force]
+            extra["tool_choice"] = {"type": "function", "function": {"name": force}}
         response = self.client.chat.completions.create(
             model=self.model_name,
             messages=[{"role": "user", "content": context}],

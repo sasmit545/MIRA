@@ -1,6 +1,8 @@
 """The notebook across a real run: what the model wrote is what it reads back
 next turn, and every evidence id it cites resolves to an observation."""
 
+import json
+
 from mira.agents.static.wiring import build_evidence_executor
 from mira.reasoning.contracts.model import ModelResponse
 from mira.reasoning.contracts.objective import Objective
@@ -46,18 +48,26 @@ def call(name):
 
 
 class Recorder:
-    def __init__(self, *responses):
+    """Replays its responses. A forced notes call is answered apart from the
+    script: declined by default, or with `forced_notes` when given."""
+
+    def __init__(self, *responses, forced_notes=None):
         self.responses = list(responses)
         self.contexts = []
         self.offered = []
+        self.forced_notes = forced_notes
+        self.forced = []  # (context, tools offered) of each forced notes call
 
-    def generate(self, context, tools):
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            self.forced.append((context, [spec.name for spec in tools]))
+            return ModelResponse(memory_update=self.forced_notes)
         self.contexts.append(context)
         self.offered.append([spec.name for spec in tools])
         return self.responses[min(len(self.contexts) - 1, len(self.responses) - 1)]
 
 
-async def run(tmp_path, *responses):
+async def run(tmp_path, *responses, forced_notes=None):
     """A loop wired the way both composition roots wire it: evidence is
     minted by the shared executor as each result arrives (KTD14)."""
     evidence = []
@@ -66,7 +76,7 @@ async def run(tmp_path, *responses):
         return {"extract_strings": PAGE, "detect_packer": PACKED}[capability]
 
     executor = build_evidence_executor(invoke, run_id=RUN, artifact_id="sample", evidence=evidence)
-    model = Recorder(*responses)
+    model = Recorder(*responses, forced_notes=forced_notes)
     loop = AgentLoop(
         model,
         ToolRuntime([STRINGS, PACKER], executor),
@@ -94,7 +104,7 @@ async def run(tmp_path, *responses):
         output_contract=FinalOutput,
     )
     result = await loop.run(Objective(description="test"), definition, evidence=evidence)
-    return model, captured["state"], result, loop
+    return model, captured.get("state"), result, loop
 
 
 # --- 1. Persistence: the next prompt shows exactly the merged notes
@@ -320,6 +330,127 @@ async def test_a_run_out_of_turns_still_gets_a_report(tmp_path):
     assert (result.summary, result.completion_reason) == ("salvaged", "limit_turns")
     assert "Run ending: the turn limit was reached" in model.contexts[-1]
     assert model.offered[-1] == []
+
+
+# --- Fix 1: skipped notes get one forced record_memory call
+
+
+async def test_skipped_notes_are_recorded_by_one_forced_call(tmp_path):
+    model, state, result, loop = await run(
+        tmp_path,
+        ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
+        ModelResponse(tool_calls=[call("extract_strings")]),  # skips its notes
+        ModelResponse(report=REPORT),
+        forced_notes=notes(understanding="Forced: packed, with a URL in its strings."),
+    )
+
+    assert len(model.forced) == 1
+    forced_context, offered = model.forced[0]
+    assert offered == []  # only record_memory, which the adapter declares and forces
+    assert "Call record_memory now" in forced_context
+    assert trace_provenance(RUN, "extract_strings", 0) in forced_context  # sees this turn's result
+    assert state.working_memory.understanding == "Forced: packed, with a URL in its strings."
+    assert loop.completion.memory_rejections == 0
+    assert result.completion_reason == "reported"
+    assert [e["turn"] for e in loop.events if e["kind"] == "notes"] == [1, 2]
+
+
+async def test_no_forced_call_when_notes_were_recorded(tmp_path):
+    model, *_ = await run(
+        tmp_path,
+        ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
+        ModelResponse(tool_calls=[call("extract_strings")], memory_update=notes()),
+        ModelResponse(report=REPORT),
+        forced_notes=notes(),
+    )
+
+    assert model.forced == []
+
+
+async def test_no_forced_call_where_notes_are_not_owed(tmp_path):
+    """Neither the first capability turn nor a deferring recall turn owes notes."""
+    model, _, _, loop = await run(
+        tmp_path,
+        ModelResponse(tool_calls=[call("detect_packer")]),
+        recall_and("extract_strings", 1),
+        ModelResponse(report=REPORT),
+        forced_notes=notes(),
+    )
+
+    assert model.forced == []
+    assert loop.completion.memory_rejections == 0
+
+
+async def test_a_declined_forced_call_is_still_a_rejection(tmp_path):
+    model, _, _, loop = await run(
+        tmp_path,
+        ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
+        ModelResponse(tool_calls=[call("extract_strings")]),
+        ModelResponse(report=REPORT),
+    )
+
+    assert len(model.forced) == 1
+    assert loop.completion.memory_rejections == 1
+
+
+# --- Fix 3: the final report keeps its supported findings and drops the rest
+
+
+def finding(title, refs):
+    return {"title": title, "description": "d", "severity": "medium", "confidence": "medium", "evidence_refs": refs}
+
+
+def report_with(*findings, verdict="suspicious"):
+    return ModelResponse(report=json.dumps({"summary": "Final.", "verdict": verdict, "findings": list(findings)}))
+
+
+def ending_with(final):
+    """One evidence-minting turn, nine more until max_turns, then the final turn."""
+    return (
+        ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
+        *[ModelResponse(memory_update=notes())] * 9,
+        final,
+    )
+
+
+async def test_the_final_report_keeps_only_supported_findings(tmp_path):
+    _, state, result, _ = await run(tmp_path, *ending_with(report_with(
+        finding("Packed with UPX", ["E1"]),
+        finding("Uncited claim", []),
+        finding("Invented evidence", ["E99"]),
+    )))
+
+    assert [f.title for f in result.findings] == ["Packed with UPX"]
+    assert result.verdict == "suspicious"
+    assert "2 finding(s) without valid evidence references were discarded" in result.summary
+    assert result.completion_reason == "limit_turns"
+    minted = {item.id for item in state.evidence}
+    for kept in result.findings:  # nothing unsupported slips through
+        assert kept.evidence_refs and {ref.evidence_id for ref in kept.evidence_refs} <= minted
+
+
+async def test_a_final_report_with_no_supported_finding_is_inconclusive(tmp_path):
+    _, _, result, _ = await run(tmp_path, *ending_with(report_with(
+        finding("Uncited claim", []), finding("Invented evidence", ["E99"]), verdict="malicious"
+    )))
+
+    assert result.findings == []
+    assert result.verdict == "inconclusive"
+    assert "2 finding(s) without valid evidence references were discarded" in result.summary
+
+
+async def test_a_normal_turn_still_rejects_a_report_with_an_unsupported_finding(tmp_path):
+    """Salvage is for the final turn only; earlier, the model can fix its report."""
+    _, _, result, loop = await run(
+        tmp_path,
+        ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
+        report_with(finding("Packed with UPX", ["E1"]), finding("Uncited claim", [])),
+        report_with(finding("Packed with UPX", ["E1"])),
+    )
+
+    assert [e["kind"] for e in loop.events].count("report_rejected") == 1
+    assert [f.title for f in result.findings] == ["Packed with UPX"]
+    assert "discarded" not in result.summary
 
 
 # --- Observers see the notes and the recalls as they happen

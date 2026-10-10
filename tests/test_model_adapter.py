@@ -99,8 +99,8 @@ if __name__ == "__main__":
     unittest.main()
 
 
-def test_no_capabilities_means_a_forced_report_only_turn():
-    """The loop's final turn: recall must not be on offer, or a model uses it."""
+def test_force_declares_and_requires_exactly_one_tool():
+    """The loop's forced turns: nothing else may be on offer, or a model uses it."""
     from mira.reasoning.contracts.tool import ToolSpec
 
     sent = []
@@ -110,12 +110,16 @@ def test_no_capabilities_means_a_forced_report_only_turn():
         create=lambda **kwargs: sent.append(kwargs) or _fake_response(content="")
     )))
 
-    adapter.generate(context="ctx", tools=[])
-    adapter.generate(context="ctx", tools=[ToolSpec(name="file_info", description="d", parameters={})])
+    spec = ToolSpec(name="file_info", description="d", parameters={})
+    adapter.generate(context="ctx", tools=[], force="submit_report")
+    adapter.generate(context="ctx", tools=[spec], force="record_memory")
+    adapter.generate(context="ctx", tools=[spec])
 
-    final, normal = sent
-    assert [d["function"]["name"] for d in final["tools"]] == ["submit_report"]
-    assert final["tool_choice"] == {"type": "function", "function": {"name": "submit_report"}}
+    report, notes, normal = sent
+    assert [d["function"]["name"] for d in report["tools"]] == ["submit_report"]
+    assert report["tool_choice"] == {"type": "function", "function": {"name": "submit_report"}}
+    assert [d["function"]["name"] for d in notes["tools"]] == ["record_memory"]
+    assert notes["tool_choice"] == {"type": "function", "function": {"name": "record_memory"}}
     assert "tool_choice" not in normal
     assert {"file_info", "record_memory", "recall_observation", "submit_report"} <= {
         d["function"]["name"] for d in normal["tools"]
