@@ -256,4 +256,5 @@ def test_the_notes_rule_closes_the_prompt_and_covers_the_empty_case():
     context = ContextBuilder.build(build_state(), build_definition())
 
     assert context.rstrip().splitlines()[-1].startswith("Reminder: any response that calls a capability must also call record_memory")
-    assert "even when nothing changed and even when you also call recall_observation" in context
+    assert "even when nothing changed: send empty lists" in context
+    assert "never two such turns in a row" in context

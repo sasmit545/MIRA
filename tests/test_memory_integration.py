@@ -227,6 +227,54 @@ async def test_the_rejection_says_what_to_send(tmp_path):
     assert "Send a record_memory call in the same response" in model.contexts[2]
 
 
+# --- A turn that recalls may write its notes one turn later
+
+
+def recall_and(name, offset):
+    handle = trace_provenance(RUN, "detect_packer", 0)
+    return ModelResponse(tool_calls=[
+        ToolCall("r", "recall_observation", {"handle": handle}),
+        ToolCall(name, name, {"offset": offset}),  # fresh arguments: not a refused rerun
+    ])
+
+
+async def test_a_recall_turn_defers_its_notes_once(tmp_path):
+    _, _, result, loop = await run(
+        tmp_path,
+        ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
+        recall_and("extract_strings", 1),  # deferred, not rejected
+        ModelResponse(tool_calls=[call("extract_strings")], memory_update=notes()),  # paid
+        recall_and("extract_strings", 2),  # may defer again after paying
+        ModelResponse(report=REPORT),
+    )
+
+    assert loop.completion.memory_rejections == 0
+    assert result.completion_reason == "reported"
+
+
+async def test_a_deferral_cannot_run_two_turns(tmp_path):
+    _, _, _, loop = await run(
+        tmp_path,
+        ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
+        recall_and("extract_strings", 1),  # deferred
+        recall_and("extract_strings", 2),  # owed now: rejected
+        ModelResponse(report=REPORT),
+    )
+
+    assert loop.completion.memory_rejections == 1
+
+
+async def test_skipping_notes_without_a_recall_is_still_rejected(tmp_path):
+    _, _, _, loop = await run(
+        tmp_path,
+        ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
+        ModelResponse(tool_calls=[call("extract_strings")]),
+        ModelResponse(report=REPORT),
+    )
+
+    assert loop.completion.memory_rejections == 1
+
+
 # --- Observers see the notes and the recalls as they happen
 
 

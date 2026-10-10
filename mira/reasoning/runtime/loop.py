@@ -81,6 +81,7 @@ class AgentLoop:
             self.tracer.save()
 
     async def _run(self, state: State, agent_def: AgentDefinition) -> FinalOutput:
+        notes_deferred = False
         while self.completion.is_active(state, agent_def):
             context_str = self.context.build(state, agent_def)
             # Shown in exactly this one prompt; this turn's recalls replace them.
@@ -152,8 +153,16 @@ class AgentLoop:
             # After the calls, so a rejected narrative cannot unwind a result or
             # the evidence minted from it. A report-only turn owes no narrative.
             memory_failure = ""
-            if (calls and notes_owed) or response.memory_update is not None:
+            if response.memory_update is not None:
+                notes_deferred = False
                 memory_failure = self._merge_narrative(state, response.memory_update)
+            elif calls and notes_owed and recalls and not notes_deferred:
+                # Reading before writing: a turn that recalls may write its notes
+                # next turn instead (a live model skipped them on every such
+                # turn), but not two turns running.
+                notes_deferred = True
+            elif calls and notes_owed:
+                memory_failure = self._merge_narrative(state, None)
 
             report, failure = None, ""
             if response.report is not None:

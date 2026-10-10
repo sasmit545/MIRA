@@ -97,3 +97,26 @@ class SiblingCallTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_no_capabilities_means_a_forced_report_only_turn():
+    """The loop's final turn: recall must not be on offer, or a model uses it."""
+    from mira.reasoning.contracts.tool import ToolSpec
+
+    sent = []
+    adapter = ModelAdapter.__new__(ModelAdapter)
+    adapter.model_name = "test-model"
+    adapter.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+        create=lambda **kwargs: sent.append(kwargs) or _fake_response(content="")
+    )))
+
+    adapter.generate(context="ctx", tools=[])
+    adapter.generate(context="ctx", tools=[ToolSpec(name="file_info", description="d", parameters={})])
+
+    final, normal = sent
+    assert [d["function"]["name"] for d in final["tools"]] == ["submit_report"]
+    assert final["tool_choice"] == {"type": "function", "function": {"name": "submit_report"}}
+    assert "tool_choice" not in normal
+    assert {"file_info", "record_memory", "recall_observation", "submit_report"} <= {
+        d["function"]["name"] for d in normal["tools"]
+    }

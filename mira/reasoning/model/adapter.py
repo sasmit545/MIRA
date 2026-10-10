@@ -41,11 +41,20 @@ class ModelAdapter:
         # is indistinguishable from a model with nothing to say, which hides
         # 404s, auth failures, and quota errors behind a "degraded" exit.
         # The SDK already retries 429s and connection errors on its own.
+        declared = declarations(tools)
+        extra = {}
+        if not tools:
+            # No capability on offer means the run is ending (the loop's final
+            # report turn): offer only the report, and require it. Left free,
+            # a live model spent that turn on recall_observation instead.
+            declared = [d for d in declared if d["function"]["name"] == REPORT_TOOL]
+            extra["tool_choice"] = {"type": "function", "function": {"name": REPORT_TOOL}}
         response = self.client.chat.completions.create(
             model=self.model_name,
             messages=[{"role": "user", "content": context}],
-            tools=declarations(tools),
+            tools=declared,
             max_tokens=MAX_TOKENS,
+            **extra,
         )
 
         usage = _usage(response.usage)
@@ -218,8 +227,8 @@ def _memory_declaration() -> dict:
         "name": MEMORY_TOOL,
         "description": (
             "Record your working notes. Call this every turn, in the same response "
-            "as your capability call, even when nothing changed (send empty lists) "
-            "and even when you also recall. Entries you omit are left unchanged."
+            "as your capability call, even when nothing changed (send empty lists). "
+            "A turn that also recalls may defer its notes one turn. Entries you omit are left unchanged."
         ),
         "parameters": {
             "type": "object",

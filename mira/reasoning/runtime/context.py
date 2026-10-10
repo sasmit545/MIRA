@@ -89,7 +89,10 @@ def render_state(state: State) -> str:
     # Last, where a model weighs it most: the rule the live run saw dropped
     # under a long prompt.
     lines.append("")
-    lines.append("Reminder: any response that calls a capability must also call record_memory (empty lists are fine).")
+    lines.append(
+        "Reminder: any response that calls a capability must also call record_memory "
+        "(empty lists are fine; a turn that recalls may defer them one turn)."
+    )
     return "\n".join(lines)
 
 

@@ -124,9 +124,16 @@ def _entries(existing: list, raw: Any, name: str, key: str, build):
         where = f"{name}[{index}]"
         if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not entry["id"]:
             return None, f"{where} must be an object with a string id"
-        if not isinstance(entry.get(key), str) or not entry[key].strip():
+        text = entry.get(key)
+        if key not in entry:
+            # Coerce before rejecting (KTD8): a live model wrote candidates as
+            # {"id", "question"}. One other text field is unambiguously the one.
+            others = [value for field, value in entry.items() if field != "id" and isinstance(value, str) and value.strip()]
+            if len(others) == 1:
+                text = others[0]
+        if not isinstance(text, str) or not text.strip():
             return None, f"{where}.{key} must be a non-empty string"
-        merged[entry["id"]] = build(**{"id": entry["id"], key: entry[key]})
+        merged[entry["id"]] = build(**{"id": entry["id"], key: text})
     return list(merged.values()), ""
 
 

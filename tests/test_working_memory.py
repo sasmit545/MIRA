@@ -5,7 +5,7 @@ import json
 import pytest
 
 from mira.core import hypothesis as core
-from mira.reasoning.contracts.memory import MemoryHypothesis
+from mira.reasoning.contracts.memory import MemoryHypothesis, WorkingMemory
 from mira.reasoning.contracts.objective import Objective
 from mira.reasoning.contracts.state import State
 
@@ -35,3 +35,18 @@ def test_snapshot_serializes_memory_and_drops_scratch():
     assert "scratch" not in snap
     assert json.loads(json.dumps(snap))["working_memory"]["hypotheses"][0]["id"] == "H1"
     assert state.evidence == [] and state.observations == []
+
+
+def test_a_misnamed_text_field_is_coerced_not_rejected():
+    """A live model wrote candidates as {"id", "question"}; ambiguity still rejects."""
+    from mira.reasoning.runtime.narrative import apply_narrative
+
+    def update(candidates):
+        return {"understanding": "", "hypotheses": [], "open_questions": [], "candidates": candidates}
+
+    memory = WorkingMemory()
+    assert apply_narrative(memory, update([{"id": "C1", "question": "Check the overlay."}]), set()) == ""
+    assert memory.candidates[0].investigation == "Check the overlay."
+
+    two = [{"id": "C2", "question": "a", "description": "b"}]
+    assert "candidates[0].investigation must be a non-empty string" in apply_narrative(memory, update(two), set())
