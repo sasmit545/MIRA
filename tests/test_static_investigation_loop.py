@@ -7,7 +7,9 @@ that evidence from one objective changes the next one.
 
 import json
 
-from support import ToolThenReportModel
+import pytest
+
+from support import NoNotesModel, ToolThenReportModel
 
 from mira.agents.base import Specialist
 from mira.reasoning.composition import build_run_id
@@ -16,6 +18,7 @@ from mira.core.coordinator import StaticCoordinator
 from mira.core.state import InvestigationState
 from mira.reasoning.contracts.finding import Confidence
 from mira.reasoning.contracts.model import ModelResponse
+from mira.reasoning.runtime.completion import MAX_MEMORY_REJECTIONS
 
 
 RESPONSES = {
@@ -145,3 +148,19 @@ async def test_a_run_with_no_report_still_returns_a_well_formed_message(tmp_path
     assert finding.evidence_refs == []
     assert finding.confidence is Confidence.LOW
     assert finding.recommended_actions == []
+
+
+@pytest.mark.parametrize("notes", [None, {"hypotheses": "not a list"}], ids=["omitted", "malformed"])
+async def test_a_model_that_never_writes_valid_notes_stops_on_the_rejection_bound(tmp_path, notes):
+    """Ends on the total bound, not by exhausting its turns."""
+    client = ScriptedClient()
+    objective = StaticCoordinator().select_next_objective([])
+    state = InvestigationState()
+
+    finding = await StaticAgent(
+        client, model=NoNotesModel("file_info", notes), trace_dir=tmp_path, max_turns=10
+    ).investigate(objective, "sample-1", state=state)
+
+    assert len(client.calls) == MAX_MEMORY_REJECTIONS
+    assert finding.assessment.startswith("inconclusive:")
+    assert state.hypotheses == []

@@ -208,6 +208,33 @@ def test_the_instructions_state_the_notes_obligations():
     assert "questions you could not close" in context
 
 
+import re
+
+import pytest
+
+# Whole words: "capa" must not match inside "capability".
+STATIC_VOCABULARY = re.compile(r"\b(static|disassembl\w*|yara|capa|import table|pe)\b")
+
+
+@pytest.mark.parametrize("role, scope", [
+    ("You are a dynamic malware investigator.", "Runtime behavior only."),
+    ("You are a forensic investigator.", "Memory and disk artifacts only."),
+])
+def test_the_generic_notes_carry_no_static_vocabulary(role, scope):
+    """Dynamic and Forensics inherit this rendering; it must not speak static."""
+    state = build_state()
+    state.working_memory.understanding = "Behaves like a loader."
+    state.working_memory.hypotheses.append(
+        MemoryHypothesis(id="H1", statement="It persists across reboots.", unknowns="Which mechanism.")
+    )
+    state.working_memory.open_questions.append(OpenQuestion(id="Q1", question="Where does it write?"))
+    state.working_memory.candidates.append(Candidate(id="C1", investigation="Check autoruns"))
+
+    context = ContextBuilder.build(state, build_definition(role=role, scope=scope)).lower()
+
+    assert STATIC_VOCABULARY.findall(context) == []
+
+
 def test_a_huge_successful_result_barely_grows_the_prompt():
     """U6 verification: a 10,000-character result leaves the prompt within a
     few hundred characters of its prior size, with its handle and digest."""

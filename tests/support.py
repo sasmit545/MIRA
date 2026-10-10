@@ -24,10 +24,13 @@ def build_minimal_pe() -> bytes:
 
 
 REPORT = '{"summary": "done", "verdict": "suspicious", "findings": []}'
+# Well-formed and empty: "nothing changed this turn" (R9).
+EMPTY_NOTES = {"understanding": "", "hypotheses": [], "open_questions": [], "candidates": []}
 
 
 class ToolThenReportModel:
-    """Calls each named tool once, then submits a report.
+    """Calls each named tool once, with the notes every call owes, then
+    submits a report.
 
     Stands in for a real model choosing capabilities. It also records the
     tools it was offered each turn, which is how a test checks that the
@@ -43,6 +46,23 @@ class ToolThenReportModel:
         if self.pending:
             name = self.pending.pop(0)
             return ModelResponse(
-                tool_calls=[ToolCall(tool_call_id=name, name=name, arguments={})]
+                tool_calls=[ToolCall(tool_call_id=name, name=name, arguments={})],
+                memory_update=dict(EMPTY_NOTES),
             )
         return ModelResponse(report=REPORT)
+
+
+class NoNotesModel:
+    """Calls a capability every turn and never supplies acceptable notes:
+    `notes=None` omits them, a dict sends it as-is (malformed)."""
+
+    def __init__(self, name, notes=None):
+        self.name = name
+        self.notes = notes
+        self.turns = 0
+
+    def generate(self, context, tools):
+        self.turns += 1
+        # Fresh arguments each turn, so the harness never refuses it as a rerun.
+        call = ToolCall(tool_call_id=str(self.turns), name=self.name, arguments={"offset": self.turns})
+        return ModelResponse(tool_calls=[call], memory_update=self.notes)
