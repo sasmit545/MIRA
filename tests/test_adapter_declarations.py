@@ -59,6 +59,18 @@ def test_a_collected_capability_hides_limit_and_keeps_offset():
     assert "limit" in declared["list_exports"]["parameters"]["properties"]
 
 
+def test_the_recall_declaration_instructions_and_select_agree_on_argument_names():
+    from mira.reasoning.definition.instructions import assemble_instructions
+    from mira.reasoning.runtime.payload import RECALL_ARGUMENTS
+
+    declared = declared_by_name()["recall_observation"]["parameters"]["properties"]
+
+    assert set(declared) == set(RECALL_ARGUMENTS)
+    assert "start" not in declared and "count" not in declared
+    instructions = assemble_instructions("role", "objective", "scope", [], "")
+    assert all(name in instructions for name in ("offset", "limit", "where", "group_by", "fields", "contains"))
+
+
 def test_a_capability_with_no_arguments_still_declares_an_object():
     assert tool_parameters({}) == {"type": "object", "properties": {}}
 

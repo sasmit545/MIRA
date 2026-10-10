@@ -287,10 +287,12 @@ def _recall_declaration() -> dict:
             "Read part of an earlier capability result that its digest in the capability "
             "history left out. The answer appears in your next turn only, so record what "
             "matters in record_memory. Does not use the tool-call budget. With only a "
-            "handle, returns the whole result if it is small. To read a large array, give "
-            "a range (start, count) or search it (contains); for example search "
-            "data.strings with contains [\"http\", \"://\"] for URL-like strings. Ranges "
-            "and search apply to arrays only."
+            "handle, returns the whole result if it is small. Over a large array: filter "
+            "items by exact key values (where), count items per value of one key "
+            "(group_by), search item text (contains), page (offset, limit), and show only "
+            "some keys (fields); for example where {\"dll\": \"advapi32.dll\"}, or group_by "
+            "\"dll\". Each item is shown with its index. Unknown arguments and keys fail "
+            "and list the ones that exist."
         ),
         "parameters": {
             "type": "object",
@@ -303,11 +305,26 @@ def _recall_declaration() -> dict:
                     "type": "string",
                     "description": (
                         "Dotted path inside the result, such as data.strings or data.sections.2. "
-                        "Optional when the result holds exactly one array and you give start, count or contains."
+                        "Optional when the result holds exactly one array and you give another selector."
                     ),
                 },
-                "start": {"type": "integer", "minimum": 0, "description": "First array index to return. Default 0."},
-                "count": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Most items to return. Default 50."},
+                "offset": {"type": "integer", "minimum": 0, "description": "Array index to start from. Default 0."},
+                "limit": {
+                    "type": "integer", "minimum": 1, "maximum": 200,
+                    "description": "Most items (or group_by values) to return. Default 50 items.",
+                },
+                "where": {
+                    "type": "object",
+                    "description": (
+                        "Keep items whose keys equal these values, such as {\"dll\": \"kernel32.dll\"}; "
+                        "a list means any of them, and null matches a missing value. Strings ignore case; "
+                        "several keys must all match."
+                    ),
+                },
+                "group_by": {
+                    "type": "string",
+                    "description": "Count the matched items per value of this key, most common first, instead of listing them.",
+                },
                 "contains": {
                     "type": "array",
                     "items": {"type": "string"},

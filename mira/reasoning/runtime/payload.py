@@ -8,13 +8,15 @@ job, and what it found already reaches the prompt as evidence.
 
 import json
 from collections import Counter
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 MAX_OBSERVATION_CHARS = 2000
 MAX_DIGEST_CHARS = 2000
 MAX_RECALL_CHARS = 6000
 DEFAULT_RECALL_ITEMS = 50
 MAX_RECALL_ITEMS = 200
+RECALL_ARGUMENTS = ("handle", "path", "offset", "limit", "contains", "where", "fields", "group_by")
+ARRAY_ARGUMENTS = RECALL_ARGUMENTS[2:]  # each one selects within an array
 
 # Digest shape: how much of each value survives.
 SCALAR_CHARS = 80
@@ -99,114 +101,210 @@ def list_arrays(value: Any, prefix: str = "") -> List[Tuple[str, int]]:
     return found
 
 
-def select(output: Any, arguments: Dict[str, Any]) -> Tuple[str, str]:
-    """Answer a recall against one full result. Returns (text, failure).
+class Selection(NamedTuple):
+    """A recall answer, and what it showed for the retrieval ledger."""
+    text: str
+    failure: str
+    path: str = ""  # the array the shown indices belong to
+    shown: Tuple[int, ...] = ()  # indices of the items the answer showed
 
-    Ranges and search apply to arrays only: an object has no order a position
-    could mean anything in, so asking for one is an explicit failure that names
-    the arrays that do exist.
+
+def select(output: Any, arguments: Dict[str, Any]) -> Selection:
+    """Answer a recall against one full result (KTD5).
+
+    Over an array, filters apply in order: `offset` (where scanning starts),
+    `where`, `contains`; then either `group_by` counts the matched values, or
+    `limit` pages them, narrowed to `fields`. Every item is named by its index
+    in the array, so handle, path and index address one record (R8). Any name
+    the result does not have fails, listing the names that exist (R9).
     """
-    path, start, count, terms, fields, failure = _recall_arguments(arguments)
+    query, failure = _recall_arguments(arguments)
     if failure:
-        return "", failure
+        return Selection("", failure)
 
-    positional = start is not None or count is not None or terms is not None or fields is not None
-    if path is None and positional:
+    path = query["path"]
+    selective = any(query[name] is not None for name in ARRAY_ARGUMENTS)
+    if path is None and selective:
         arrays = list_arrays(output)
         if len(arrays) != 1:
-            return "", f"give a path: this result holds {_array_names(arrays)}"
+            return Selection("", f"give a path: this result holds {_array_names(arrays)}")
         path = arrays[0][0]
 
     target, failure = _resolve(output, path)
     if failure:
-        return "", failure
+        return Selection("", failure)
     where = path or "(whole result)"
 
     if not isinstance(target, list):
-        if positional:
-            return "", (
-                f"{where} is not an array; start, count, contains and fields apply to arrays: "
+        if selective:
+            return Selection("", (
+                f"{where} is not an array; {', '.join(ARRAY_ARGUMENTS)} apply to arrays: "
                 f"{_array_names(list_arrays(output))}"
-            )
+            ))
         text = json.dumps(target, sort_keys=True, default=repr)
         if len(text) > MAX_RECALL_CHARS:
-            return "", (
+            return Selection("", (
                 f"{where} is {len(text)} characters, over the {MAX_RECALL_CHARS}-character "
-                f"recall limit; narrow it with path and a range or search over "
+                f"recall limit; narrow it with path and a range, filter or search over "
                 f"{_array_names(list_arrays(target, path or ''))}"
-            )
-        return f"{where}:\n{text}", ""
+            ))
+        return Selection(f"{where}:\n{text}", "", *_item_address(output, path))
 
-    if start is not None and start >= len(target) and target:
-        return "", f"start {start} is past the end of {where}, which holds {len(target)} items (0..{len(target) - 1})"
-    begin = start or 0
-    limit = count or DEFAULT_RECALL_ITEMS
+    begin = query["offset"] or 0
+    if begin >= len(target) and target:
+        return Selection("", f"offset {begin} is past the end of {where}, which holds {len(target)} items (0..{len(target) - 1})")
 
-    if terms is not None:
-        matches = [
-            (index, item)
-            for index, item in enumerate(target[begin:], begin)
-            if any(term in _serialize(item).lower() for term in terms)
-        ]
-        picked = matches[:limit]
-        header = (
-            f"{where}: {len(matches)} of {len(target) - begin} items from {begin} "
-            f"contain any of {terms}"
-        )
+    keys = sorted({key for item in target if isinstance(item, dict) for key in item})
+    for kind, names in (
+        ("where", list(query["where"] or {})),
+        ("group_by", [query["group_by"]] if query["group_by"] else []),
+        ("fields", query["fields"] or []),
+    ):
+        unknown = [name for name in names if name not in keys]
+        if unknown and target:
+            if not keys:
+                return Selection("", f"{kind} needs items that are objects, and the items of {where} are not")
+            return Selection("", (
+                f"{kind} names {', '.join(unknown)}, not a key of the items of {where}; "
+                f"their keys are {', '.join(keys)}"
+            ))
+
+    matched = [
+        (index, item)
+        for index, item in enumerate(target[begin:], begin)
+        if _matches(item, query["where"], query["contains"])
+    ]
+    criteria = " and ".join(
+        part for part in (
+            f"match where {json.dumps(query['where'], sort_keys=True)}" if query["where"] is not None else "",
+            f"contain any of {query['contains']}" if query["contains"] is not None else "",
+        ) if part
+    )
+    if criteria:
+        header = f"{where}: {len(matched)} of {len(target) - begin} items from {begin} {criteria}"
+    elif query["group_by"]:
+        header = f"{where}: {len(matched)} items from {begin}"
     else:
-        picked = list(enumerate(target[begin:begin + limit], begin))
         header = (
-            f"{where}: items {begin}..{begin + len(picked) - 1} of {len(target)}"
-            if picked else f"{where}: no items (it holds {len(target)})"
+            f"{where}: items {begin}..{begin + min(len(matched), query['limit'] or DEFAULT_RECALL_ITEMS) - 1} of {len(target)}"
+            if matched else f"{where}: no items (it holds {len(target)})"
         )
+    header += _unfetched(output)
 
-    keys = sorted({key for _, item in picked if isinstance(item, dict) for key in item})
+    if query["group_by"]:
+        return Selection(_grouped(header, matched, query["group_by"], query["limit"]), "", path or "")
+
+    limit = query["limit"] or DEFAULT_RECALL_ITEMS
+    picked = matched[:limit]
+    fields = query["fields"]
     if fields is not None:
-        # Search above ran over whole items; only the display is narrowed.
-        if keys and not set(fields) & set(keys):
-            return "", f"none of fields {fields} exist on the items of {where}; their keys are {', '.join(keys)}"
+        # Filters above ran over whole items; only the display is narrowed.
         picked = [
             (index, {key: item[key] for key in fields if key in item} if isinstance(item, dict) else item)
             for index, item in picked
         ]
         header += f"; fields {fields}"
 
-    lines, used = [], 0
+    lines, used, shown = [], 0, []
     for index, item in picked:
         line = f"[{index}] {truncate(_serialize(item), MAX_RECALL_CHARS // 4)}"
         if used + len(line) > MAX_RECALL_CHARS and lines:
-            header += f"; stopped at item {index} to stay within the recall limit, continue with start={index}"
+            header += f"; stopped at item {index} to stay within the recall limit, continue with offset={index}"
             if fields is None and keys:
                 # A live model paged a 35-item array 10 at a time: most of each
                 # item was a block it did not need. Narrowing fits far more.
                 header += f", or show fewer keys per item with fields (they have: {', '.join(keys)})"
             break
         lines.append(line)
+        shown.append(index)
         used += len(line) + 1
     else:
         shown_to = picked[-1][0] + 1 if picked else begin
-        if terms is not None and len(matches) > len(picked):
-            header += f"; showing the first {len(picked)}, continue with start={shown_to}"
-        elif terms is None and shown_to < len(target):
-            header += f"; more remain, continue with start={shown_to}"
-    return "\n".join([header, *lines]), ""
+        if criteria and len(matched) > len(picked):
+            header += f"; showing the first {len(picked)}, continue with offset={shown_to}"
+        elif not criteria and shown_to < len(target):
+            header += f"; more remain, continue with offset={shown_to}"
+    return Selection("\n".join([header, *lines]), "", path or "", tuple(shown))
 
 
-def _recall_arguments(arguments: Dict[str, Any]):
-    """Validate the optional selectors. Returns (path, start, count, terms, fields, failure)."""
+def _grouped(header: str, matched: list, field: str, limit: Optional[int]) -> str:
+    """Value counts of one field over the matched items, most common first."""
+    counts = Counter(_serialize(item.get(field)) if isinstance(item, dict) else "null" for _, item in matched)
+    groups = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+    header += f"; grouped by {field}: {len(groups)} values"
+    lines, used = [], 0
+    for value, count in groups[:limit or len(groups)]:
+        line = f"{truncate(value, MAX_RECALL_CHARS // 4)} {count}"
+        if used + len(line) > MAX_RECALL_CHARS and lines:
+            break
+        lines.append(line)
+        used += len(line) + 1
+    if len(lines) < len(groups):
+        header += f"; {len(groups) - len(lines)} values left out, narrow with where or raise limit"
+    return "\n".join([header, *lines])
+
+
+def _matches(item: Any, where: Optional[Dict[str, Any]], terms: Optional[List[str]]) -> bool:
+    if where:
+        for field, wanted in where.items():
+            value = item.get(field) if isinstance(item, dict) else None
+            options = wanted if isinstance(wanted, list) else [wanted]
+            if not any(_equal(value, option) for option in options):
+                return False
+    return terms is None or any(term in _serialize(item).lower() for term in terms)
+
+
+def _equal(value: Any, wanted: Any) -> bool:
+    """Strings ignore case; a missing key reads as null; True is not 1."""
+    if isinstance(value, str) and isinstance(wanted, str):
+        return value.casefold() == wanted.casefold()
+    if isinstance(value, bool) or isinstance(wanted, bool):
+        return type(value) is type(wanted) and value == wanted
+    return value == wanted
+
+
+def _unfetched(output: Any) -> str:
+    """Items a collected list never fetched, and the call that fetches them."""
+    metadata = output.get("metadata") if isinstance(output, dict) else None
+    if not isinstance(metadata, dict) or not metadata.get("unfetched"):
+        return ""
+    text = f"; {metadata['unfetched']} items of this list were never fetched"
+    if "next_offset" in metadata:
+        call = metadata.get("capability") or "the same capability"
+        text += f", fetch the rest with {call}(offset={metadata['next_offset']})"
+    return text
+
+
+def _item_address(output: Any, path: Optional[str]) -> Tuple[str, Tuple[int, ...]]:
+    """A path ending in an array index shows that one item of its array."""
+    parent, _, last = (path or "").rpartition(".")
+    if parent and last.isdigit() and isinstance(_resolve(output, parent)[0], list):
+        return parent, (int(last),)
+    return path or "", ()
+
+
+SCALARS = (str, int, float, bool, type(None))
+
+
+def _recall_arguments(arguments: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Validate the selectors. Returns (query, failure)."""
+    unknown = [name for name in arguments if name not in RECALL_ARGUMENTS]
+    if unknown:
+        return None, f"unknown argument {', '.join(unknown)}; accepted: {', '.join(RECALL_ARGUMENTS)}"
+
     path = arguments.get("path")
     if path is not None and (not isinstance(path, str) or not path.strip()):
-        return None, None, None, None, None, "path must be a dotted path such as data.strings"
+        return None, "path must be a dotted path such as data.strings"
 
     numbers = {}
-    for name, low, high in (("start", 0, None), ("count", 1, MAX_RECALL_ITEMS)):
+    for name, low, high in (("offset", 0, None), ("limit", 1, MAX_RECALL_ITEMS)):
         value = arguments.get(name)
         if value is not None and (
             isinstance(value, bool) or not isinstance(value, int)
             or value < low or (high is not None and value > high)
         ):
             bound = f"between {low} and {high}" if high else f"at least {low}"
-            return None, None, None, None, None, f"{name} must be an integer {bound}"
+            return None, f"{name} must be an integer {bound}"
         numbers[name] = value
 
     terms = arguments.get("contains")
@@ -216,7 +314,7 @@ def _recall_arguments(arguments: Dict[str, Any]):
         if not isinstance(terms, list) or not terms or not all(
             isinstance(term, str) and term.strip() for term in terms
         ):
-            return None, None, None, None, None, "contains must be a non-empty list of non-empty strings"
+            return None, "contains must be a non-empty list of non-empty strings"
         terms = [term.strip().lower() for term in terms]
 
     fields = arguments.get("fields")
@@ -225,9 +323,31 @@ def _recall_arguments(arguments: Dict[str, Any]):
     if fields is not None and (
         not isinstance(fields, list) or not fields or not all(isinstance(name, str) and name.strip() for name in fields)
     ):
-        return None, None, None, None, None, "fields must be a non-empty list of item keys"
+        return None, "fields must be a non-empty list of item keys"
 
-    return (path.strip() if path else None), numbers["start"], numbers["count"], terms, fields, ""
+    where = arguments.get("where")
+    if where is not None:
+        if not isinstance(where, dict) or not where:
+            return None, "where must be an object mapping item keys to a value, or to a list of values meaning any of them"
+        for wanted in where.values():
+            options = wanted if isinstance(wanted, list) else [wanted]
+            if not options or not all(isinstance(option, SCALARS) for option in options):
+                return None, "where values must be a string, number, boolean or null, or a non-empty list of those"
+
+    group_by = arguments.get("group_by")
+    if group_by is not None and (not isinstance(group_by, str) or not group_by.strip()):
+        return None, "group_by must be one item key"
+    if group_by is not None and fields is not None:
+        return None, "fields does not apply to group_by, which shows value counts rather than items"
+
+    return {
+        "path": path.strip() if path else None,
+        **numbers,
+        "contains": terms,
+        "fields": fields,
+        "where": where,
+        "group_by": group_by,
+    }, ""
 
 
 def _resolve(output: Any, path: Optional[str]) -> Tuple[Any, str]:

@@ -168,7 +168,7 @@ def test_a_digest_does_not_alter_the_result():
 
 
 def test_search_finds_an_indicator_late_in_a_large_array():
-    text, failure = select(PAGE, {"contains": ["://"]})
+    text, failure, *_ = select(PAGE, {"contains": ["://"]})
 
     assert failure == ""
     assert f"[{LATE}]" in text and URL in text
@@ -176,24 +176,24 @@ def test_search_finds_an_indicator_late_in_a_large_array():
 
 
 def test_search_is_case_insensitive_and_respects_count():
-    text, failure = select(PAGE, {"path": "data.strings", "contains": ["BENIGN_STRING_00"], "count": 5})
+    text, failure, *_ = select(PAGE, {"path": "data.strings", "contains": ["BENIGN_STRING_00"], "limit": 5})
 
     assert failure == ""
     assert "100 of 1000 items" in text
     assert text.count("\n[") == 5
-    assert "continue with start=5" in text
+    assert "continue with offset=5" in text
 
 
 def test_a_range_returns_exactly_the_requested_items():
-    text, _ = select(PAGE, {"path": "data.strings", "start": 10, "count": 3})
+    text, _, *_ = select(PAGE, {"path": "data.strings", "offset": 10, "limit": 3})
 
     assert "items 10..12 of 1000" in text
     assert [line.split("]")[0] for line in text.splitlines()[1:]] == ["[10", "[11", "[12"]
-    assert "continue with start=13" in text
+    assert "continue with offset=13" in text
 
 
 def test_a_range_at_the_end_returns_only_what_exists():
-    text, failure = select(PAGE, {"path": "data.strings", "start": 998, "count": 50})
+    text, failure, *_ = select(PAGE, {"path": "data.strings", "offset": 998, "limit": 50})
 
     assert failure == ""
     assert "items 998..999 of 1000" in text
@@ -203,15 +203,15 @@ def test_a_range_at_the_end_returns_only_what_exists():
 def test_the_character_limit_stops_a_range_with_a_continuation():
     wide = {"data": {"rows": ["x" * 1000 for _ in range(50)]}}
 
-    text, failure = select(wide, {"path": "data.rows", "count": 50})
+    text, failure, *_ = select(wide, {"path": "data.rows", "limit": 50})
 
     assert failure == ""
     assert len(text) < MAX_RECALL_CHARS + 500
-    assert "stopped at item" in text and "continue with start=" in text
+    assert "stopped at item" in text and "continue with offset=" in text
 
 
 def test_a_small_object_is_returned_whole():
-    text, failure = select(PAGE, {"path": "metadata"})
+    text, failure, *_ = select(PAGE, {"path": "metadata"})
 
     assert failure == ""
     assert '"has_more": false' in text
@@ -220,28 +220,28 @@ def test_a_small_object_is_returned_whole():
 @pytest.mark.parametrize(
     "arguments, expected",
     [
-        ({"path": "data.strings", "start": 1000}, "past the end"),
-        ({"path": "data.strings", "start": -1}, "start must be an integer"),
-        ({"path": "data.strings", "start": True}, "start must be an integer"),
-        ({"path": "data.strings", "count": 0}, "count must be an integer between 1 and 200"),
-        ({"path": "data.strings", "count": 201}, "count must be an integer between 1 and 200"),
+        ({"path": "data.strings", "offset": 1000}, "past the end"),
+        ({"path": "data.strings", "offset": -1}, "offset must be an integer"),
+        ({"path": "data.strings", "offset": True}, "offset must be an integer"),
+        ({"path": "data.strings", "limit": 0}, "limit must be an integer between 1 and 200"),
+        ({"path": "data.strings", "limit": 201}, "limit must be an integer between 1 and 200"),
         ({"path": "data.strings", "contains": []}, "contains must be"),
         ({"path": "data.strings", "contains": [""]}, "contains must be"),
         ({"path": "data.nope"}, "'nope' is not in data; its keys are ['offset', 'strings']"),
         ({"path": "data.strings.5000"}, "array of 1000 items"),
-        ({"path": "metadata", "start": 0}, "metadata is not an array"),
+        ({"path": "metadata", "offset": 0}, "metadata is not an array"),
         ({"path": ""}, "path must be a dotted path"),
     ],
 )
 def test_invalid_selectors_fail_with_a_clear_reason(arguments, expected):
-    text, failure = select(PAGE, arguments)
+    text, failure, *_ = select(PAGE, arguments)
 
     assert text == ""
     assert expected in failure
 
 
 def test_a_whole_result_too_large_to_return_names_its_arrays():
-    _, failure = select(PAGE, {})
+    _, failure, *_ = select(PAGE, {})
 
     assert "over the 6000-character recall limit" in failure
     assert "data.strings (1000 items)" in failure
@@ -250,7 +250,7 @@ def test_a_whole_result_too_large_to_return_names_its_arrays():
 def test_an_ambiguous_array_needs_a_path():
     two = {"data": {"imports": [1, 2], "exports": [3]}}
 
-    _, failure = select(two, {"start": 0})
+    _, failure, *_ = select(two, {"offset": 0})
 
     assert "give a path" in failure
 
@@ -295,7 +295,7 @@ def test_repeated_and_failed_calls_keep_distinct_handles_for_recall():
         ({"handle": "recall_run#extract_strings#9"}, "no capability call in this run"),
         ({"handle": "other_run#extract_strings#1"}, "no capability call in this run"),
         ({"handle": "garbage"}, "no capability call in this run"),
-        ({"handle": "recall_run#extract_strings#1", "count": "ten"}, "count must be an integer"),
+        ({"handle": "recall_run#extract_strings#1", "limit": "ten"}, "limit must be an integer"),
     ],
 )
 def test_a_bad_recall_is_an_explicit_failure(arguments, expected):
@@ -314,7 +314,7 @@ def test_recall_reads_the_same_observation_live_and_from_the_trace(tmp_path):
     for record in capability_history(state):
         if not record.success:
             continue
-        arguments = {"start": 985, "count": 10} if record.name == "extract_strings" else {}
+        arguments = {"offset": 985, "limit": 10} if record.name == "extract_strings" else {}
         live = select(live_observation(state, record.handle)["result"].output, arguments)
         traced = select(resolve_observation(tmp_path, record.handle)["result"]["output"], arguments)
         assert live == traced
@@ -391,7 +391,7 @@ async def test_recalls_past_the_per_turn_cap_are_refused(tmp_path):
     handle = trace_provenance("loop_run", "extract_strings", 0)
     many = ModelResponse(
         tool_calls=[
-            ToolCall(f"r{index}", "recall_observation", {"handle": handle, "start": index, "count": 1})
+            ToolCall(f"r{index}", "recall_observation", {"handle": handle, "offset": index, "limit": 1})
             for index in range(MAX_RECALLS_PER_TURN + 1)
         ]
     )
@@ -420,7 +420,7 @@ CAPA = {"data": {"findings": [
 
 def test_fields_fit_a_whole_large_array_in_one_recall():
     """The live run paged these 35 findings ten at a time; one recall now does it."""
-    text, failure = select_recall(CAPA, {"path": "data.findings", "count": 35, "fields": ["rule_id"]})
+    text, failure, *_ = select_recall(CAPA, {"path": "data.findings", "limit": 35, "fields": ["rule_id"]})
 
     assert failure == ""
     assert "items 0..34 of 35" in text and "stopped" not in text
@@ -429,20 +429,125 @@ def test_fields_fit_a_whole_large_array_in_one_recall():
 
 
 def test_a_cut_off_recall_suggests_fields_and_names_the_keys():
-    text, _ = select_recall(CAPA, {"path": "data.findings", "count": 35})
+    text, _, *_ = select_recall(CAPA, {"path": "data.findings", "limit": 35})
 
     assert "stopped at item" in text
     assert "show fewer keys per item with fields (they have: meta, namespace, rule_id)" in text
 
 
 def test_contains_searches_whole_items_while_fields_narrow_the_display():
-    text, _ = select_recall(CAPA, {"path": "data.findings", "contains": ["ns/7"], "fields": ["rule_id"]})
+    text, _, *_ = select_recall(CAPA, {"path": "data.findings", "contains": ["ns/7"], "fields": ["rule_id"]})
 
     assert '[7] {"rule_id": "rule-07"}' in text
     assert "ns/7" not in text.split("\n", 1)[1]
 
 
 def test_unknown_fields_are_refused_with_the_real_keys():
-    _, failure = select_recall(CAPA, {"path": "data.findings", "fields": ["name"]})
+    _, failure, *_ = select_recall(CAPA, {"path": "data.findings", "fields": ["name"]})
 
-    assert failure == "none of fields ['name'] exist on the items of data.findings; their keys are meta, namespace, rule_id"
+    assert "fields names name" in failure and "their keys are meta, namespace, rule_id" in failure
+
+
+# --- Targeted retrieval over a whole stored list (KTD5) -----------------------
+
+
+def recall_imports(output=IMPORTS, **arguments):
+    return select(output, {"handle": "h", "path": "data.imports", **arguments})[:2]
+
+
+def shown(text):
+    return [int(line[1:line.index("]")]) for line in text.splitlines()[1:] if line.startswith("[")]
+
+
+def test_where_matches_a_value_ignoring_case():
+    text, failure = recall_imports(where={"dll": "advapi32.dll"}, fields=["dll", "name"], limit=200)
+
+    assert failure == ""
+    assert "40 of 412 items" in text
+    assert shown(text) == list(range(275, 315))
+
+
+def test_where_null_matches_items_without_that_value():
+    text, _ = recall_imports(where={"name": None})
+
+    assert shown(text) == [409, 410, 411]
+
+
+def test_a_where_list_means_any_of():
+    text, _ = recall_imports(where={"dll": ["USER32.dll", "GDI32.dll"]}, fields=["dll"], limit=200)
+
+    assert "125 of 412 items" in text
+    assert shown(text) == list(range(180, 275)) + list(range(315, 345))
+
+
+def test_group_by_counts_every_value_in_descending_order():
+    text, failure = recall_imports(group_by="dll")
+
+    assert failure == ""
+    assert "grouped by dll: 9 values" in text
+    counts = [int(line.rsplit(" ", 1)[1]) for line in text.splitlines()[1:]]
+    assert sum(counts) == 412 and counts == sorted(counts, reverse=True)
+    assert text.splitlines()[1] == '"KERNEL32.dll" 180'
+
+
+def test_group_by_counts_only_the_matched_items():
+    text, _ = recall_imports(where={"dll": ["USER32.dll", "GDI32.dll"]}, group_by="dll")
+
+    assert text.splitlines()[1:] == ['"USER32.dll" 95', '"GDI32.dll" 30']
+
+
+def test_group_by_past_the_recall_limit_says_what_it_left_out():
+    text, _ = recall_imports(group_by="name")
+
+    assert len(text) <= MAX_RECALL_CHARS + 300
+    assert "values left out" in text
+
+
+def test_a_range_at_the_end_says_nothing_remains():
+    text, _ = recall_imports(offset=400, limit=50)
+
+    assert shown(text) == list(range(400, 412))
+    assert "continue" not in text
+
+
+def test_an_index_path_addresses_the_same_record_as_a_range():
+    ranged, _ = recall_imports(offset=37, limit=1)
+    single, *_ = select(IMPORTS, {"path": "data.imports.37"})
+
+    assert ranged.splitlines()[1] == "[37] " + single.splitlines()[1]
+
+
+@pytest.mark.parametrize("arguments, expected", [
+    ({"start": 5}, "unknown argument start; accepted: handle, path, offset, limit, contains, where, fields, group_by"),
+    ({"where": {"library": "x"}}, "their keys are address, dll, name, ordinal"),
+    ({"group_by": "library"}, "their keys are address, dll, name, ordinal"),
+    ({"where": "dll=x"}, "where must be an object"),
+    ({"where": {"dll": {"nested": 1}}}, "where values must be"),
+    ({"group_by": "dll", "fields": ["dll"]}, "fields does not apply to group_by"),
+])
+def test_unknown_or_malformed_retrieval_arguments_fail_and_name_what_exists(arguments, expected):
+    text, failure = recall_imports(**arguments)
+
+    assert text == ""
+    assert expected in failure
+
+
+def test_where_on_a_non_array_fails_and_names_the_arrays():
+    _, failure, *_ = select(IMPORTS, {"path": "metadata", "where": {"dll": "x"}})
+
+    assert "metadata is not an array" in failure and "data.imports (412 items)" in failure
+
+
+def test_an_answer_over_a_truncated_list_names_what_was_never_fetched():
+    truncated = imports_envelope(total=12_000, unfetched=11_588, has_more=True, next_offset=412)
+
+    text, _ = recall_imports(truncated, limit=5)
+
+    assert "11588 items of this list were never fetched" in text
+    assert "list_imports(offset=412)" in text
+
+
+def test_an_empty_list_answers_with_no_items():
+    text, failure, *_ = select({"data": {"imports": []}}, {"path": "data.imports", "where": {"dll": "x"}})
+
+    assert failure == "" and "0 of 0 items" in text

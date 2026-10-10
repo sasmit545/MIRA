@@ -471,10 +471,10 @@ def _recall(state: State, arguments: dict) -> str:
     result = observation["result"]
     if not result.success:
         return f"recall_observation({asked}): that call failed, and its error is all it produced: {result.error}"
-    text, failure = select(result.output, arguments)
-    if failure:
-        return f"recall_observation({asked}) failed: {failure}"
-    return f"recall_observation({asked}):\n{text}"
+    selection = select(result.output, arguments)
+    if selection.failure:
+        return f"recall_observation({asked}) failed: {selection.failure}"
+    return f"recall_observation({asked}):\n{selection.text}"
 
 
 # --- Report validation.
