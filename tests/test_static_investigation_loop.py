@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from support import NoNotesModel, ToolThenReportModel
+from support import EMPTY_NOTES, NoNotesModel, ToolThenReportModel
 
 from mira.agents.base import Specialist
 from mira.reasoning.composition import build_run_id
@@ -18,6 +18,7 @@ from mira.core.coordinator import StaticCoordinator
 from mira.core.state import InvestigationState
 from mira.reasoning.contracts.finding import Confidence
 from mira.reasoning.contracts.model import ModelResponse
+from mira.reasoning.contracts.tool import ToolCall
 from mira.reasoning.runtime.completion import MAX_MEMORY_REJECTIONS
 
 
@@ -164,3 +165,44 @@ async def test_a_model_that_never_writes_valid_notes_stops_on_the_rejection_boun
     assert len(client.calls) == MAX_MEMORY_REJECTIONS
     assert finding.assessment.startswith("inconclusive:")
     assert state.hypotheses == []
+
+
+class RepeatingModel:
+    """Calls file_info with notes, then repeats that exact call every turn."""
+
+    def __init__(self, repeat_notes=None):
+        self.repeat_notes = repeat_notes
+        self.turns = 0
+
+    def generate(self, context, tools):
+        self.turns += 1
+        call = ToolCall(tool_call_id=str(self.turns), name="file_info", arguments={})
+        notes = dict(EMPTY_NOTES) if self.turns == 1 else self.repeat_notes
+        return ModelResponse(tool_calls=[call], memory_update=notes)
+
+
+async def test_a_model_that_only_repeats_a_call_ends_degraded_not_at_max_turns(tmp_path):
+    """Each refused rerun is an empty turn; two in a row end the run."""
+    client = ScriptedClient()
+    model = RepeatingModel()
+    objective = StaticCoordinator().select_next_objective([])
+
+    finding = await StaticAgent(client, model=model, trace_dir=tmp_path, max_turns=10).investigate(
+        objective, "sample-1"
+    )
+
+    assert client.calls == ["file_info"]  # the repeats were refused, never run
+    assert model.turns == 3
+    assert finding.assessment.startswith("inconclusive:")
+
+
+async def test_a_repeat_sent_with_notes_is_still_progress(tmp_path):
+    """The model is still reasoning, so only the turn limit bounds it."""
+    model = RepeatingModel(repeat_notes=dict(EMPTY_NOTES))
+    objective = StaticCoordinator().select_next_objective([])
+
+    await StaticAgent(ScriptedClient(), model=model, trace_dir=tmp_path, max_turns=5).investigate(
+        objective, "sample-1"
+    )
+
+    assert model.turns == 5

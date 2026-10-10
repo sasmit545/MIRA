@@ -98,8 +98,6 @@ class AgentLoop:
                 state.turn_count += 1
                 continue
 
-            self.completion.record_non_empty_response()
-
             # Capabilities run before a sibling report is judged: the report may
             # cite evidence these calls just minted, and dropping them would
             # discard work already requested.
@@ -134,6 +132,14 @@ class AgentLoop:
                 state.record_tool_result(tool_result)
                 calls.append(tool_call)
                 results.append(tool_result)
+
+            # Judged after the calls: a turn whose every call was a refused rerun
+            # did nothing, and counts as empty so a model that ignores the
+            # refusal cannot loop to max_turns. Notes or a recall are progress.
+            if calls or recalls or response.memory_update is not None or response.report is not None:
+                self.completion.record_non_empty_response()
+            else:
+                self.completion.record_empty_response()
 
             # After the calls, so a rejected narrative cannot unwind a result or
             # the evidence minted from it. A report-only turn owes no narrative.
