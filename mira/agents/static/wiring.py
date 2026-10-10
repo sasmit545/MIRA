@@ -181,9 +181,11 @@ def build_evidence_executor(
     minted = len(state.evidence) if state is not None else 0
 
     async def execute(capability: str, arguments: dict):
-        result = await invoke(capability, arguments)
+        # Claimed before invoking: a call that raises still reaches the trace
+        # as a failed result, so it occupies this capability's occurrence too.
         provenance = trace_provenance(run_id, capability, occurrences[capability])
         occurrences[capability] += 1
+        result = await invoke(capability, arguments)
         # `results` is deliberately read before this result joins it: a
         # normalizer's `prior` is what earlier capabilities reported.
         for signal in normalize(capability, result, results):

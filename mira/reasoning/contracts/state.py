@@ -50,7 +50,9 @@ class State:
         """Log a harness-tool outcome (a rejected narrative, say) for the model
         and the trace without spending capability budget: record_tool_call is
         the only other way in, and it counts toward max_tool_calls."""
-        self.observations.append({'call': call, 'result': result})
+        # Marked so the capability history skips it: a skipped duplicate carries
+        # a capability's name, yet it never ran and must take no occurrence.
+        self.observations.append({'call': call, 'result': result, 'harness': True})
 
     def add_finding(self, finding: Finding) -> None:
         self.findings.append(finding)

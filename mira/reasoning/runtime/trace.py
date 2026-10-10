@@ -2,13 +2,18 @@
 
 import json
 import os
+from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import Iterable, Iterator, List, Dict, Any, Optional, Tuple
 from ..contracts.tool import ToolCall, ToolResult
 from ..contracts.model import ModelResponse
+from ..contracts.state import State
 
 
 PROVENANCE_SEPARATOR = "#"
+MAX_OBSERVATION_CHARS = 2000
+MAX_DIGEST_CHARS = 4000
 
 
 def trace_provenance(run_id: str, capability: str, occurrence: int) -> str:
@@ -42,12 +47,10 @@ def resolve_observation(
     a position past the end, an unreadable or truncated trace. A caller asking
     about an old run deserves a negative answer, not an exception.
     """
-    parts = provenance.rsplit(PROVENANCE_SEPARATOR, 2)
-    if len(parts) != 3:
+    parsed = _parse_provenance(provenance)
+    if parsed is None:
         return None
-    run_id, capability, position = parts
-    if not run_id or not capability or not position.isdigit():
-        return None
+    run_id, capability, occurrence = parsed
 
     try:
         with open(trace_path(trace_dir, run_id)) as trace_file:
@@ -57,19 +60,112 @@ def resolve_observation(
     if not isinstance(turns, list):
         return None
 
-    # This capability's own calls, in order. Turns that recorded no tool call -
-    # an empty response, a rejected report - contribute nothing, and a call the
-    # runtime refused before the executor belongs to a different capability, so
-    # it cannot shift this one's numbering.
-    observations = [
-        {"call": call, "result": result}
+    # Turns that recorded no tool call - an empty response, a rejected report -
+    # contribute nothing: the tracer only writes capability calls.
+    pairs = (
+        (call.get("name"), call, result)
         for turn in turns
         if isinstance(turn, dict)
         for call, result in zip(turn.get("tool_calls") or [], turn.get("tool_results") or [])
-        if isinstance(call, dict) and call.get("name") == capability
+        if isinstance(call, dict)
+    )
+    return _find(pairs, capability, occurrence)
+
+
+def live_observation(state: State, provenance: str) -> Optional[Dict[str, Any]]:
+    """`resolve_observation()` against the run still in progress.
+
+    The trace file is only written when the run ends (KTD6), so a mid-run
+    lookup reads the observation log instead, through the same numbering.
+    A handle naming another run is an absence, like any other miss.
+    """
+    parsed = _parse_provenance(provenance)
+    if parsed is None or parsed[0] != state.run_id:
+        return None
+    return _find(_live_pairs(state), parsed[1], parsed[2])
+
+
+@dataclass(frozen=True)
+class CapabilityRecord:
+    """One capability call as the model is shown it, without its raw payload."""
+    handle: str  # trace_provenance(), so recall and evidence share one identifier
+    name: str
+    arguments: Dict[str, Any]
+    success: bool
+    error: Optional[str]
+    digest: str  # empty for a failure: the error is what it produced
+
+
+def capability_history(state: State) -> List[CapabilityRecord]:
+    """Every capability call this run made, in order, each with its handle."""
+    return [
+        CapabilityRecord(
+            handle=trace_provenance(state.run_id, name, occurrence),
+            name=name,
+            arguments=dict(call.arguments),
+            success=result.success,
+            error=result.error,
+            digest=digest(result.output) if result.success else "",
+        )
+        for name, occurrence, call, result in _numbered(_live_pairs(state))
     ]
-    index = int(position)
-    return observations[index] if index < len(observations) else None
+
+
+def digest(output: Any, limit: int = MAX_DIGEST_CHARS) -> str:
+    """A bounded, code-derived summary of a successful result (R20).
+
+    Exists so a call that minted no evidence still leaves the model something
+    to reason from. Deterministic: sorted keys, anything unserializable repr'd.
+    """
+    return truncate(json.dumps(output, sort_keys=True, default=repr), limit)
+
+
+def truncate(text: str, limit: int = MAX_OBSERVATION_CHARS) -> str:
+    """Cap a rendered payload so one tool result cannot fill the context window."""
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}... [truncated, {len(text) - limit} more characters]"
+
+
+def _parse_provenance(provenance: str) -> Optional[Tuple[str, str, int]]:
+    parts = provenance.rsplit(PROVENANCE_SEPARATOR, 2)
+    if len(parts) != 3:
+        return None
+    run_id, capability, position = parts
+    if not run_id or not capability or not position.isdigit():
+        return None
+    return run_id, capability, int(position)
+
+
+def _live_pairs(state: State) -> Iterator[Tuple[str, ToolCall, ToolResult]]:
+    """The observation log as the trace would hold it: capability calls only.
+
+    Harness entries - a rejected report or narrative, a skipped duplicate -
+    never reach the tracer, so they take no occurrence here either.
+    """
+    for observation in state.observations:
+        if not observation.get("harness") and observation["result"] is not None:
+            yield observation["call"].name, observation["call"], observation["result"]
+
+
+def _numbered(pairs: Iterable[Tuple[Any, Any, Any]]) -> Iterator[Tuple[Any, int, Any, Any]]:
+    """Number each capability's own calls in log order - the one counting rule.
+
+    A call the runtime refused belongs to a different capability, so it cannot
+    shift this one's numbering. A failed call to this capability does occupy
+    an occurrence: the trace records it like any other.
+    """
+    seen: Counter = Counter()
+    for name, call, result in pairs:
+        yield name, seen[name], call, result
+        seen[name] += 1
+
+
+def _find(pairs, capability: str, occurrence: int) -> Optional[Dict[str, Any]]:
+    for name, number, call, result in _numbered(pairs):
+        if name == capability and number == occurrence:
+            return {"call": call, "result": result}
+    return None
 
 
 class Tracer:

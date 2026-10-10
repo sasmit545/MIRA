@@ -8,8 +8,7 @@ from typing import Any
 from ..contracts.state import State
 from ..contracts.tool import ToolResult
 from ..definition.instructions import assemble_instructions
-
-MAX_OBSERVATION_CHARS = 2000
+from .trace import MAX_OBSERVATION_CHARS, truncate  # noqa: F401 - re-exported
 
 
 class ContextBuilder:
@@ -67,10 +66,3 @@ def _render_result(result: ToolResult | None) -> str:
     if not result.success:
         return f"ERROR: {result.error}"
     return truncate(repr(result.output))
-
-
-def truncate(text: str, limit: int = MAX_OBSERVATION_CHARS) -> str:
-    """Cap a rendered payload so one tool result cannot fill the context window."""
-    if len(text) <= limit:
-        return text
-    return f"{text[:limit]}... [truncated, {len(text) - limit} more characters]"

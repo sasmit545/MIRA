@@ -187,13 +187,16 @@ class AgentLoop:
             name=REPORT_TOOL_CALL_ID,
             arguments={"report": report},
         )
-        state.record_tool_call(call)
-        state.record_tool_result(
+        # A rejected report has always spent capability budget; it is still a
+        # harness entry, so it takes no occurrence in the capability history.
+        state.tool_call_count += 1
+        state.record_harness_observation(
+            call,
             ToolResult(
                 tool_call_id=REPORT_TOOL_CALL_ID,
                 success=False,
                 error=f"Report rejected: {failure}",
-            )
+            ),
         )
 
     def _parse_report(
