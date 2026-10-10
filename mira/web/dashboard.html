@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MIRA · Investigation Console</title>
+    <style>
+      :root { color-scheme: dark; --bg:#09111f; --panel:#111c2f; --line:#243451; --text:#edf3ff; --muted:#9eafca; --accent:#7c93ff; --warn:#f9b951; --bad:#ff7385; --good:#45d69b; }
+      * { box-sizing: border-box; } body { margin:0; background:var(--bg); color:var(--text); font:15px system-ui, sans-serif; }
+      header { padding:24px max(24px, calc((100vw - 1280px)/2)); border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
+      h1,h2,h3,p { margin-top:0; } h1 { letter-spacing:.08em; font-size:20px; } .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.1em; }
+      main { max-width:1280px; margin:0 auto; padding:24px; display:grid; gap:20px; grid-template-columns:340px 1fr; }
+      .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px; } form { display:grid; gap:12px; } label { display:grid; gap:6px; color:var(--muted); font-size:13px; }
+      input, textarea, button { font:inherit; } input,textarea { border:1px solid var(--line); background:#0c1628; color:var(--text); padding:10px; border-radius:7px; } textarea { min-height:80px; resize:vertical; }
+      button { background:var(--accent); color:#081126; border:0; padding:11px; border-radius:7px; font-weight:700; cursor:pointer; } button:disabled { opacity:.55; cursor:wait; }
+      #workspace { display:grid; gap:20px; } .summary { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; } .metric { padding:14px; background:#0c1628; border-radius:8px; } .metric strong { display:block; font-size:18px; margin-top:4px; overflow-wrap:anywhere; }
+      .columns { display:grid; grid-template-columns:1fr 1fr; gap:20px; } .feed { max-height:470px; overflow:auto; font:13px ui-monospace, monospace; } .event { padding:12px 0; border-bottom:1px solid var(--line); } .event:last-child { border:0; }
+      .finding { border-left:3px solid var(--warn); padding:10px 12px; background:#0c1628; margin:8px 0; } .critical,.high { border-color:var(--bad); } .info,.low { border-color:var(--good); }
+      pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:0; color:#c9d8f3; } .hidden { display:none; } .status { color:var(--muted); } .error { color:var(--bad); }
+      @media (max-width:800px) { main,.columns { grid-template-columns:1fr; } .summary { grid-template-columns:repeat(2,1fr); } header { padding:18px 20px; } }
+    </style>
+  </head>
+  <body>
+    <header><div><div class="label">Static-analysis vertical slice</div><h1>MIRA Investigation Console</h1></div><div id="status" class="status">Ready</div></header>
+    <main>
+      <aside class="card"><h2>New investigation</h2><form id="form"><label>PE sample<input name="sample" type="file" required /></label><label>Objective<textarea name="objective">Identify suspicious behavior</textarea></label><label>Maximum turns<input name="max_turns" type="number" value="10" min="1" /></label><label>Maximum tool calls<input name="max_tool_calls" type="number" value="20" min="1" /></label><button>Start static analysis</button></form><p class="label" style="margin-top:18px">Samples remain local to this server. Dynamic execution is not available.</p></aside>
+      <section id="workspace" class="hidden"><div class="summary card"><div class="metric"><span class="label">Verdict</span><strong id="verdict">—</strong></div><div class="metric"><span class="label">Status</span><strong id="run-status">—</strong></div><div class="metric"><span class="label">Evidence</span><strong id="evidence-count">0</strong></div><div class="metric"><span class="label">Tokens</span><strong id="tokens">0</strong></div></div><div class="columns"><article class="card"><h2>Live investigation</h2><div id="feed" class="feed"></div></article><article class="card"><h2>Findings</h2><div id="report"><p class="status">Results will appear when the agent submits its report.</p></div></article></div><article class="card"><h2>Evidence & trace</h2><pre id="trace">Select a completed investigation to load its trace.</pre></article></section>
+    </main>
+    <script>
+      const $ = id => document.getElementById(id);
+      const form = $('form'), feed = $('feed');
+      function line(text, cls) { const el=document.createElement('div'); el.className=`event ${cls ?? ''}`; el.textContent=text; feed.append(el); feed.scrollTop=feed.scrollHeight; }
+      function renderEvent(event) {
+        const turn=`[turn ${event.turn ?? '—'}]`;
+        if (event.kind==='tool_calls') { event.calls.forEach((call,i) => { const result=event.results[i]; const args=Object.entries(call.arguments).map(([k,v])=>`${k}=${JSON.stringify(v)}`).join(', '); line(`${turn} ${call.name}(${args}) → ${result.success ? 'ok' : 'error: '+result.error}`, result.success ? '' : 'error'); }); }
+        else if (event.kind==='memory_rejected') line(`${turn} notes rejected: ${event.failure}`, 'error');
+        else if (event.kind==='report_rejected') line(`${turn} report rejected: ${event.failure}`, 'error');
+        else if (event.kind==='empty') line(`${turn} (no tool call, no report)`, 'status');
+        else if (event.kind==='report') line(`${turn} report submitted: verdict=${event.report.verdict}`);
+        else line(`${turn} ${event.kind}`);
+      }
+      function renderResult(result) { $('verdict').textContent=result.verdict; $('evidence-count').textContent=result.evidence.length; $('tokens').textContent=result.metadata.total_tokens; const report=$('report'); report.replaceChildren(); const summary=document.createElement('p'); summary.textContent=result.summary; report.append(summary); for (const finding of result.findings) { const item=document.createElement('div'); item.className=`finding ${finding.severity}`; const title=document.createElement('strong'); title.textContent=finding.title; const description=document.createElement('p'); description.textContent=finding.description; const metadata=document.createElement('span'); metadata.className='label'; metadata.textContent=`${finding.severity} · ${finding.confidence} · ${finding.evidence_refs.map(x=>x.evidence_id).join(', ')}`; item.append(title,description,metadata); report.append(item); } if (result.recommended_actions.length) { const actions=document.createElement('p'); actions.className='label'; actions.textContent=`Recommended actions: ${result.recommended_actions.join(' · ')}`; report.append(actions); } }
+      async function loadTrace(id) { const response=await fetch(`/api/investigations/${id}/trace`); if(response.ok) $('trace').textContent=JSON.stringify(await response.json(),null,2); }
+      form.addEventListener('submit', async event => { event.preventDefault(); feed.replaceChildren(); $('workspace').classList.remove('hidden'); $('status').textContent='Starting…'; form.querySelector('button').disabled=true; const response=await fetch('/api/investigations',{method:'POST',body:new FormData(form)}); if(!response.ok){ $('status').textContent=await response.text(); form.querySelector('button').disabled=false; return; } const run=await response.json(); $('run-status').textContent=run.status; const source=new EventSource(`/api/investigations/${run.id}/events`); source.onmessage=async ({data}) => { const event=JSON.parse(data); if(['completed','failed'].includes(event.kind)){ source.close(); form.querySelector('button').disabled=false; $('run-status').textContent=event.kind; $('status').textContent=event.kind==='completed'?'Complete':'Failed'; if(event.result){ renderResult(event.result); await loadTrace(run.id); } else { const error=document.createElement('p'); error.className='error'; error.textContent=event.error; $('report').replaceChildren(error); } return; } renderEvent(event); }; });
+    </script>
+  </body>
+</html>
