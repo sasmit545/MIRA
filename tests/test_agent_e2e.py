@@ -424,3 +424,34 @@ def test_the_cli_still_reports_each_capability_as_it_runs(capsys):
     printed = capsys.readouterr().out
     assert "file_info" in printed
     assert "ok" in printed
+
+
+# --- Malformed input still yields a well-formed FINDING (U9) -----------------
+
+from support import ToolThenReportModel
+
+from mira.agents.base import InvestigationFinding
+from mira.reasoning.composition import build_run_id
+
+IMPORTS_OBJECTIVE = InvestigationObjective(
+    name="Assess imports",
+    description="Assess what the import table reveals.",
+    reason="test",
+    capabilities=("list_imports", "file_info"),
+)
+
+
+@pytest.mark.parametrize("content, parses", [(build_minimal_pe()[:300], True), (SAMPLE_BYTES, False)], ids=["truncated-pe", "not-a-pe"])
+async def test_malformed_input_yields_a_well_formed_finding(tmp_path, content, parses):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(content)
+    client, artifact_id = build_client(sample)
+    agent = StaticAgent(client, model=ToolThenReportModel("list_imports", "file_info"), trace_dir=tmp_path / "runs")
+
+    finding = await agent.investigate(IMPORTS_OBJECTIVE, artifact_id)
+
+    assert isinstance(finding, InvestigationFinding)
+    assert finding.assessment.split(":")[0] in {"inconclusive", "suspicious"}
+    imports = resolve_observation(tmp_path / "runs", f"{build_run_id(artifact_id, IMPORTS_OBJECTIVE.name)}#list_imports#0")
+    # pefile tolerates the truncation; the non-PE fails the capability, not the run.
+    assert imports["result"]["success"] is parses

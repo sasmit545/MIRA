@@ -230,3 +230,167 @@ async def test_a_repeat_sent_with_new_notes_is_still_progress(tmp_path):
     )
 
     assert model.turns == 5 + 1  # every turn, then the report-only turn
+
+
+# --- The list_imports slice, end to end (U9) ---------------------------------
+
+import re
+from pathlib import Path
+
+from support import PagedImports
+
+from mira.agents.static.wiring import STATIC_ROLE, STATIC_SCOPE, build_evidence_executor, build_executor, tool_manifest
+from mira.reasoning.composition import build_loop, build_tracer
+from mira.reasoning.contracts.objective import Objective
+from mira.reasoning.contracts.output import FinalOutput
+from mira.reasoning.definition.agent import AgentDefinition
+from mira.reasoning.runtime.tool_runtime import ToolRuntime
+from mira.reasoning.runtime.trace import resolve_observation
+
+SLICE_RUN = "slice_run"
+IMPORTS_HANDLE = f"{SLICE_RUN}#list_imports#0"
+LATE_INJECTION = 1500
+
+
+def import_rows(count=2000):
+    rows = [
+        {"dll": ("KERNEL32.dll", "USER32.dll")[index % 2], "name": f"Fn{index}", "ordinal": None, "address": 4096 + index}
+        for index in range(count)
+    ]
+    if count > LATE_INJECTION:
+        rows[LATE_INJECTION]["name"] = "VirtualAllocEx"
+    return rows
+
+
+def injection_id(context):
+    found = re.search(r"^\s+(E\d+) \[list_imports\] Imports associated with process injection", context, re.MULTILINE)
+    return found.group(1) if found else None
+
+
+class ImportSliceModel:
+    """Collects the imports, recalls exactly the slice it needs, writes notes,
+    tries to cite a recalled item instead of evidence, then reports."""
+
+    def __init__(self):
+        self.contexts = []
+
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()
+        self.contexts.append(context)
+        turn = len(self.contexts)
+        if turn == 1:
+            return ModelResponse(tool_calls=[ToolCall("1", "list_imports", {})])
+        cited = injection_id(context)
+        if turn == 2:
+            return ModelResponse(
+                tool_calls=[
+                    ToolCall("r1", "recall_observation", {"handle": IMPORTS_HANDLE, "path": "data.imports", "where": {"name": "virtualallocex"}}),
+                    ToolCall("r2", "recall_observation", {"handle": IMPORTS_HANDLE, "path": "data.imports", "group_by": "dll"}),
+                ],
+                memory_update={**EMPTY_NOTES, "hypotheses": [
+                    {"id": "H1", "statement": "Injects into other processes.", "confidence": 0.6, "status": "open",
+                     "supporting_evidence": [cited]},
+                ]},
+            )
+        refs = ["data.imports.1500"] if turn == 3 else [cited]
+        return ModelResponse(report=json.dumps({
+            "summary": "Imports a process-injection API late in a large table.",
+            "verdict": "suspicious",
+            "findings": [{"title": "Process injection import", "description": "VirtualAllocEx is imported.",
+                          "severity": "medium", "confidence": "medium", "evidence_refs": refs}],
+        }))
+
+
+async def run_slice(tmp_path, client, model):
+    """Composed as the CLI composes it, over a fake client instead of the MCP server."""
+    manifest = tool_manifest()
+    permitted = [spec for spec in manifest if spec.name == "list_imports"]
+    evidence = []
+    execute = build_evidence_executor(build_executor(client, "sample"), run_id=SLICE_RUN, artifact_id="sample", evidence=evidence)
+    definition = AgentDefinition(
+        role=STATIC_ROLE, scope=STATIC_SCOPE, tool_manifest=manifest, allowed_tools=permitted,
+        max_turns=10, max_tool_calls=20, output_contract=FinalOutput,
+    )
+    loop = build_loop(tool_runtime=ToolRuntime(permitted, execute), tracer=build_tracer(run_id=SLICE_RUN, trace_dir=tmp_path), model=model)
+    output = await loop.run(Objective(description="Assess what the imports reveal"), definition, evidence=evidence)
+    return output, evidence
+
+
+@pytest.fixture
+async def import_slice(tmp_path):
+    client, model = PagedImports(0, imports=import_rows()), ImportSliceModel()
+    output, evidence = await run_slice(tmp_path, client, model)
+    return output, evidence, client, model, tmp_path
+
+
+async def test_the_report_cites_evidence_for_an_import_deep_in_the_list(import_slice):
+    output, evidence, client, _, trace_dir = import_slice
+
+    assert output.completion_reason == "reported"
+    (finding,) = output.findings
+    (ref,) = [item for item in evidence if item.id == finding.evidence_refs[0].evidence_id]
+    assert "VirtualAllocEx" in ref.observation and "among all 2000 imports" in ref.observation
+    assert ref.provenance == IMPORTS_HANDLE
+    observation = resolve_observation(trace_dir, ref.provenance)
+    assert observation["result"]["output"]["data"]["imports"][LATE_INJECTION]["name"] == "VirtualAllocEx"
+    assert len(client.calls) == 2  # two pages, one call
+
+
+async def test_no_prompt_carries_an_import_record_a_recall_did_not_return(import_slice):
+    _, _, _, model, _ = import_slice
+    needles = {index: json.dumps(row, sort_keys=True) for index, row in enumerate(import_rows())}
+
+    shown = [{index for index, needle in needles.items() if needle in context} for context in model.contexts]
+
+    assert shown[2] == {LATE_INJECTION}  # the turn after the where recall, and only it
+    assert all(not found for turn, found in enumerate(shown) if turn != 2)
+    assert '"KERNEL32.dll" 1000' in model.contexts[2]  # the group_by answer is counts, not records
+
+
+async def test_the_slice_prompt_does_not_grow_with_the_list(import_slice):
+    _, _, _, model, _ = import_slice
+
+    assert max(len(context) for context in model.contexts) - len(model.contexts[0]) < 10_000
+
+
+async def test_the_slice_serves_no_repeat_and_runs_no_duplicate(import_slice):
+    output, *_ = import_slice
+
+    assert output.metadata["repeat_recalls"] == 0
+    assert output.metadata["reruns_refused"] == 0
+    assert output.metadata["recalls_requested"] == 2
+
+
+async def test_a_finding_citing_a_recalled_item_instead_of_evidence_is_rejected(import_slice):
+    _, _, _, model, _ = import_slice
+
+    assert "Report rejected" in model.contexts[3]
+    assert "never observed: data.imports.1500" in model.contexts[3]
+
+
+class EmptyTableModel:
+    def __init__(self):
+        self.contexts = []
+
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()
+        self.contexts.append(context)
+        if len(self.contexts) == 1:
+            return ModelResponse(tool_calls=[ToolCall("1", "list_imports", {})])
+        if len(self.contexts) == 2:
+            return ModelResponse(tool_calls=[ToolCall("r", "recall_observation", {
+                "handle": IMPORTS_HANDLE, "path": "data.imports", "where": {"name": "VirtualAllocEx"}})])
+        return ModelResponse(report='{"summary": "no imports", "verdict": "inconclusive", "findings": []}')
+
+
+async def test_an_empty_import_table_is_described_and_recalled_as_empty(tmp_path):
+    model = EmptyTableModel()
+
+    output, evidence = await run_slice(tmp_path, PagedImports(0), model)
+
+    assert evidence == []
+    assert "data.imports (0)" in model.contexts[1] and "fetched 0 of 0" in model.contexts[1]
+    assert "0 of 0 items" in model.contexts[2]
+    assert output.completion_reason == "reported"
