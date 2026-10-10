@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from typing import List
 from .finding import Finding
+from .memory import WorkingMemory
 from .tool import ToolResult
 
 
@@ -20,3 +21,6 @@ class FinalOutput:
     # context window. This never crosses to an orchestrator: the specialist's
     # own message carries evidence references instead.
     observations: List[ToolResult] = field(default_factory=list)
+    # The notes as they stood when the run returned, so the specialist can
+    # promote the hypotheses and compose its assessment from them.
+    memory: WorkingMemory = field(default_factory=WorkingMemory)

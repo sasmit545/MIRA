@@ -17,6 +17,7 @@ from mira.contracts.capabilities.static.list_imports import ListImportsInput, Li
 from mira.contracts.requests import CapabilityRequest
 from mira.contracts.results import CapabilityResult
 from mira.core.evidence import Evidence
+from mira.core.hypothesis import Hypothesis
 from mira.core.objective import InvestigationObjective
 from mira.core.state import InvestigationState
 from mira.mcp.client import StaticMCPClient
@@ -28,6 +29,7 @@ from mira.reasoning.composition import (
     build_tracer,
 )
 from mira.reasoning.contracts.finding import Confidence, Finding, Severity
+from mira.reasoning.contracts.memory import WorkingMemory
 from mira.reasoning.contracts.objective import Objective as LoopObjective
 from mira.reasoning.contracts.output import FinalOutput
 from mira.reasoning.definition.agent import AgentDefinition
@@ -54,6 +56,52 @@ def _overall_confidence(findings: list[Finding]) -> Confidence:
         ),
     )
     return gravest.confidence
+
+
+def _promote(memory: WorkingMemory, state: InvestigationState) -> dict[str, str]:
+    """Deposit the final hypotheses; returns each note id's shared-state id.
+
+    Numbering continues past what the state holds, as evidence numbering
+    does: two runs both depositing "H1" would make the id ambiguous.
+    """
+    ids = {}
+    for note in memory.hypotheses:
+        shared_id = f"H{len(state.hypotheses) + 1}"
+        # add_hypothesis already logs the change into its history.
+        state.add_hypothesis(
+            Hypothesis(
+                id=shared_id,
+                statement=note.statement,
+                confidence=note.confidence,
+                supporting_evidence=list(note.supporting_evidence),
+                contradicting_evidence=list(note.contradicting_evidence),
+                status=note.status,
+            )
+        )
+        ids[note.id] = shared_id
+    return ids
+
+
+def _assessment(output: FinalOutput, ids: dict[str, str]) -> str:
+    """The verdict leads, then what the run believed and could not settle (R22).
+
+    `core.Hypothesis` has no unknowns field, so they live here instead.
+    """
+    memory = output.memory
+    lines = [f"{output.verdict}: {output.summary}"]
+    if memory.understanding:
+        lines.append(f"Understanding: {memory.understanding}")
+    if memory.hypotheses:
+        lines.append("Hypotheses weighed:")
+    for note in memory.hypotheses:
+        line = f"- {ids.get(note.id, note.id)} ({note.status}, {note.confidence:.2f}) {note.statement}"
+        if note.unknowns:
+            line += f" — unknown: {note.unknowns}"
+        lines.append(line)
+    if memory.open_questions:
+        lines.append("Unresolved questions:")
+    lines.extend(f"- {question.question}" for question in memory.open_questions)
+    return "\n".join(lines)
 
 
 class StaticAgent:
@@ -145,12 +193,17 @@ class StaticAgent:
             agent_definition,
             evidence=evidence,
         )
+        # Only a reported run's notes are current: a run that stopped early
+        # may hold beliefs written before its last results arrived.
+        ids = {}
+        if state is not None and output.completion_reason == "reported":
+            ids = _promote(output.memory, state)
         return InvestigationFinding(
             artifact_id=artifact_id,
             # The verdict leads the assessment rather than taking a field of
             # its own: section 10's payload names an assessment, and a reader
             # needs the judgement in the sentence they are given.
-            assessment=f"{output.verdict}: {output.summary}",
+            assessment=_assessment(output, ids),
             findings=output.findings,
             # The loop already reduced the shared accumulator to identifiers.
             evidence_refs=output.evidence,

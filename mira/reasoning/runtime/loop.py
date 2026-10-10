@@ -169,6 +169,7 @@ class AgentLoop:
             completion_reason=self._completion_reason(state, agent_def),
             metadata=self._metadata(state),
             observations=self._observations(state),
+            memory=state.working_memory,
         )
 
     def _merge_narrative(self, state: State, update: Optional[dict]) -> str:
@@ -254,6 +255,7 @@ class AgentLoop:
                 metadata={**metadata, **self._metadata(state)},
                 recommended_actions=actions,
                 observations=self._observations(state),
+                memory=state.working_memory,
             ),
             "",
         )
