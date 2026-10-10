@@ -81,7 +81,7 @@ class AgentLoop:
             self.tracer.save()
 
     async def _run(self, state: State, agent_def: AgentDefinition) -> FinalOutput:
-        notes_deferred = False
+        notes_pending = False
         while self.completion.is_active(state, agent_def):
             context_str = self.context.build(state, agent_def)
             # Shown in exactly this one prompt; this turn's recalls replace them.
@@ -153,16 +153,22 @@ class AgentLoop:
             # After the calls, so a rejected narrative cannot unwind a result or
             # the evidence minted from it. A report-only turn owes no narrative.
             memory_failure = ""
+            owes = (calls and notes_owed) or (notes_pending and (calls or recalls))
             if response.memory_update is not None:
-                notes_deferred = False
+                notes_pending = False
                 memory_failure = self._merge_narrative(state, response.memory_update)
-            elif calls and notes_owed and recalls and not notes_deferred:
+            elif owes and not notes_pending and recalls:
                 # Reading before writing: a turn that recalls may write its notes
                 # next turn instead (a live model skipped them on every such
                 # turn), but not two turns running.
-                notes_deferred = True
-            elif calls and notes_owed:
+                notes_pending = True
+            elif owes:
                 memory_failure = self._merge_narrative(state, None)
+            elif recalls:
+                # A recall is shown once. What it showed must reach the notes on
+                # the next turn that acts, or the model forgets it and re-reads
+                # forever (a live run spent seven turns doing exactly that).
+                notes_pending = True
 
             report, failure = None, ""
             if response.report is not None:
@@ -189,8 +195,11 @@ class AgentLoop:
                 self._notify({"kind": "report_rejected", "turn": state.turn_count + 1, "failure": failure})
             state.turn_count += 1
 
-        if self.completion.memory_rejections >= MAX_MEMORY_REJECTIONS and self.completion.consecutive_empty_responses < 2:
-            salvaged = await self._final_report_turn(state, agent_def)
+        # Any limit gets one report-only turn, except a model that has gone
+        # silent: asking it once more would only spend another call.
+        reason = self._completion_reason(state, agent_def)
+        if self.completion.consecutive_empty_responses < 2:
+            salvaged = await self._final_report_turn(state, agent_def, reason)
             if salvaged is not None:
                 return salvaged
 
@@ -199,27 +208,28 @@ class AgentLoop:
             verdict="inconclusive",
             findings=state.findings,
             evidence=self._evidence(state),
-            completion_reason=self._completion_reason(state, agent_def),
+            completion_reason=reason,
             metadata=self._metadata(state),
             observations=self._observations(state),
             memory=state.working_memory,
         )
 
-    async def _final_report_turn(self, state: State, agent_def: AgentDefinition) -> Optional[FinalOutput]:
-        """One last turn after the notes bound trips, accepting only a report.
+    async def _final_report_turn(self, state: State, agent_def: AgentDefinition, reason: str) -> Optional[FinalOutput]:
+        """One last turn after a limit ends the run, accepting only a report.
 
-        The run stays degraded - its notes lag its results, so nothing is
-        promoted - but the investigation it paid for is not discarded.
+        The result keeps the limit as its completion reason, so the specialist
+        promotes nothing, but the investigation it paid for is not discarded.
         """
+        why = {
+            "degraded": f"notes were rejected {MAX_MEMORY_REJECTIONS} times",
+            "limit_calls": "the capability-call limit was reached",
+        }.get(reason, "the turn limit was reached")
         state.record_harness_observation(
             ToolCall(tool_call_id=REPORT_TOOL_CALL_ID, name=REPORT_TOOL_CALL_ID, arguments={}),
             ToolResult(
                 tool_call_id=REPORT_TOOL_CALL_ID,
                 success=False,
-                error=(
-                    f"Run ending: notes were rejected {MAX_MEMORY_REJECTIONS} times. "
-                    "Call submit_report now with what you have; no capability will run."
-                ),
+                error=f"Run ending: {why}. Call submit_report now with what you have; no capability will run.",
             ),
         )
         context_str = self.context.build(state, agent_def)
@@ -236,7 +246,7 @@ class AgentLoop:
             self._notify({"kind": "report_rejected", "turn": state.turn_count, "failure": failure})
             return None
         report = dataclasses.replace(
-            report, completion_reason="degraded", metadata={**report.metadata, **self._metadata(state)}
+            report, completion_reason=reason, metadata={**report.metadata, **self._metadata(state)}
         )
         self._notify({"kind": "report", "turn": state.turn_count, "report": report})
         return report
@@ -247,8 +257,8 @@ class AgentLoop:
             # Says what to send, not only what was missing: a model that drops
             # the notes under a long prompt needs the fix spelled out.
             failure = (
-                "record_memory is required on every turn that calls a capability. "
-                "Send a record_memory call in the same response as the capability call; "
+                "record_memory is required on every turn that calls a capability, "
+                "and on the turn after a recall. Send a record_memory call in this response; "
                 "empty lists are accepted when nothing changed."
             )
         else:

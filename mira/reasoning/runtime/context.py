@@ -91,7 +91,8 @@ def render_state(state: State) -> str:
     lines.append("")
     lines.append(
         "Reminder: any response that calls a capability must also call record_memory "
-        "(empty lists are fine; a turn that recalls may defer them one turn)."
+        "(empty lists are fine; a turn that recalls may defer them one turn), "
+        "and so must the turn after a recall."
     )
     return "\n".join(lines)
 

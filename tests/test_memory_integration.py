@@ -224,7 +224,7 @@ async def test_the_rejection_says_what_to_send(tmp_path):
         ModelResponse(report=REPORT),
     )
 
-    assert "Send a record_memory call in the same response" in model.contexts[2]
+    assert "Send a record_memory call in this response" in model.contexts[2]
 
 
 # --- A turn that recalls may write its notes one turn later
@@ -273,6 +273,53 @@ async def test_skipping_notes_without_a_recall_is_still_rejected(tmp_path):
     )
 
     assert loop.completion.memory_rejections == 1
+
+
+# --- A recall must be followed by notes; a turn limit still yields a report
+
+
+RECALL_ONLY = ModelResponse(tool_calls=[
+    ToolCall("r", "recall_observation", {"handle": trace_provenance(RUN, "detect_packer", 0)})
+])
+
+
+async def test_a_model_that_only_recalls_is_stopped_by_the_rejection_bound(tmp_path):
+    """A live run re-read the same results for seven turns without a note."""
+    model, _, result, loop = await run(
+        tmp_path,
+        ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
+        RECALL_ONLY,  # turn 2: notes now pending; turns 3-5 are rejected
+    )
+
+    assert loop.completion.memory_rejections == 3
+    assert len(model.contexts) == 5 + 1  # well inside max_turns=10, plus the final turn
+    assert result.completion_reason == "degraded"
+
+
+async def test_notes_after_a_recall_pay_what_it_owed(tmp_path):
+    _, _, result, loop = await run(
+        tmp_path,
+        ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
+        RECALL_ONLY,
+        ModelResponse(memory_update=notes(understanding="Read the packer result.")),
+        RECALL_ONLY,  # pending again, but a report-only turn acts on nothing and owes none
+        ModelResponse(report=REPORT),
+    )
+
+    assert loop.completion.memory_rejections == 0
+    assert result.completion_reason == "reported"
+
+
+async def test_a_run_out_of_turns_still_gets_a_report(tmp_path):
+    model, _, result, _ = await run(
+        tmp_path,
+        *[ModelResponse(memory_update=notes())] * 10,  # max_turns=10, never reports
+        ModelResponse(report=SALVAGED),
+    )
+
+    assert (result.summary, result.completion_reason) == ("salvaged", "limit_turns")
+    assert "Run ending: the turn limit was reached" in model.contexts[-1]
+    assert model.offered[-1] == []
 
 
 # --- Observers see the notes and the recalls as they happen

@@ -36,6 +36,7 @@ def assemble_instructions(
         "Call record_memory in the same response as every capability call; a turn that calls a capability without it has its notes rejected.",
         "This holds even when nothing changed: send empty lists rather than skipping the call.",
         "One exception: a turn that also calls recall_observation may write its notes on the next turn instead, but never two such turns in a row.",
+        "A recalled result is shown only once, so the turn after any recall must call record_memory with what it showed you.",
         "Notes are additive: reuse an id to revise an entry, leave an entry out to keep it unchanged, and list ids in close to remove resolved or obsolete ones.",
         "Write your interpretation, not a copy of tool output, and cite evidence identifiers (E1, E2, ...) for hypotheses.",
         "",

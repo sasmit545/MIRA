@@ -211,4 +211,4 @@ async def test_a_repeat_sent_with_notes_is_still_progress(tmp_path):
         objective, "sample-1"
     )
 
-    assert model.turns == 5
+    assert model.turns == 5 + 1  # every turn, then the report-only turn
