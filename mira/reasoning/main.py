@@ -90,6 +90,8 @@ def _print_turn(event: dict) -> None:
             args = ", ".join(f"{name}={value!r}" for name, value in call.arguments.items())
             status = "ok" if result.success else f"error: {result.error}"
             print(f"[turn {turn}] {call.name}({args}) -> {status}")
+    elif kind == "memory_rejected":
+        print(f"[turn {turn}] notes rejected: {event['failure']}")
     elif kind == "report_rejected":
         print(f"[turn {turn}] report rejected: {event['failure']}")
     elif kind == "empty":

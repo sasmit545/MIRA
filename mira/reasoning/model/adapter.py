@@ -252,6 +252,11 @@ def _memory_declaration() -> dict:
                 },
                 "open_questions": entries("question", "Questions still open."),
                 "candidates": entries("investigation", "Possible next investigations - candidates, not a plan."),
+                "close": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Ids of hypotheses, questions or candidates to remove because they are resolved or obsolete.",
+                },
             },
             "required": ["understanding", "hypotheses", "open_questions", "candidates"],
         },

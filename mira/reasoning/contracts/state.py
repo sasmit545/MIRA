@@ -46,6 +46,12 @@ class State:
         # This should not happen if we call record_tool_call before record_tool_result
         raise RuntimeError("No pending tool call to record result for")
 
+    def record_harness_observation(self, call: ToolCall, result: ToolResult) -> None:
+        """Log a harness-tool outcome (a rejected narrative, say) for the model
+        and the trace without spending capability budget: record_tool_call is
+        the only other way in, and it counts toward max_tool_calls."""
+        self.observations.append({'call': call, 'result': result})
+
     def add_finding(self, finding: Finding) -> None:
         self.findings.append(finding)
 

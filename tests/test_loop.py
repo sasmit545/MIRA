@@ -17,6 +17,9 @@ from mira.reasoning.runtime.trace import Tracer
 
 REPORT = '{"summary": "test", "verdict": "test", "findings": []}'
 
+# What a compliant model writes when it has nothing new to say (R9).
+NOTES = {"understanding": "", "hypotheses": [], "open_questions": [], "candidates": []}
+
 FINDING = {
     "title": "Packed executable",
     "description": "The sample's .text section is packed.",
@@ -156,7 +159,7 @@ async def test_unknown_tool_is_observed(tmp_path):
 async def test_on_turn_sees_each_tool_call_and_the_final_report(tmp_path):
     spec = ToolSpec(name="probe", description="probes", parameters={})
     model = ScriptedModel(
-        ModelResponse(tool_calls=[ToolCall(tool_call_id="1", name="probe", arguments={})]),
+        ModelResponse(tool_calls=[ToolCall(tool_call_id="1", name="probe", arguments={})], memory_update=NOTES),
         ModelResponse(report=REPORT),
     )
     events = []
@@ -312,3 +315,196 @@ async def test_a_report_does_not_discard_a_capability_call_in_the_same_turn(tmp_
     assert executed == ["probe"]
     assert result.completion_reason == "reported"
     assert result.metadata["tool_calls"] == 1
+
+
+# --- U4: narrative validation, merge and the rejection bound.
+
+PROBE = ToolSpec(name="probe", description="d", parameters={})
+CALL = ToolCall(tool_call_id="1", name="probe", arguments={})
+
+
+def hypothesis(id="H1", **fields):
+    return {"id": id, "statement": "packed", "confidence": 0.6, "status": "open", **fields}
+
+
+def notes(**fields):
+    return {**NOTES, **fields}
+
+
+def counting_executor():
+    calls = []
+
+    def executor(name, arguments):
+        calls.append(name)
+        return {"status": "ok"}
+
+    return calls, executor
+
+
+async def run_loop(tmp_path, *responses, evidence=None):
+    calls, executor = counting_executor()
+    loop = build_loop(ScriptedModel(*responses), tmp_path, tools=[PROBE], executor=executor)
+    result = await loop.run(
+        Objective(description="o"), build_definition(tools=[PROBE]), evidence=evidence
+    )
+    return loop, result, calls
+
+
+async def memory_after(tmp_path, *updates):
+    """Run one capability turn per update, then report; return the final memory."""
+    responses = [ModelResponse(tool_calls=[CALL], memory_update=update) for update in updates]
+    responses.append(ModelResponse(report=REPORT))
+    calls, executor = counting_executor()
+    loop = build_loop(ScriptedModel(*responses), tmp_path, tools=[PROBE], executor=executor)
+    captured = {}
+    original = loop._merge_narrative
+
+    def spy(state, update):
+        captured["state"] = state
+        return original(state, update)
+
+    loop._merge_narrative = spy
+    await loop.run(Objective(description="o"), build_definition(tools=[PROBE]))
+    return captured["state"].working_memory
+
+
+async def test_a_well_formed_narrative_merges_into_the_memory(tmp_path):
+    memory = await memory_after(
+        tmp_path, notes(understanding="looks packed", hypotheses=[hypothesis()],
+                        open_questions=[{"id": "Q1", "question": "is it packed?"}])
+    )
+
+    assert memory.understanding == "looks packed"
+    assert [h.id for h in memory.hypotheses] == ["H1"]
+    assert [q.id for q in memory.open_questions] == ["Q1"]
+
+
+async def test_a_status_differing_in_case_or_whitespace_is_coerced(tmp_path):
+    memory = await memory_after(tmp_path, notes(hypotheses=[hypothesis(status="  Supported ")]))
+
+    assert memory.hypotheses[0].status == "supported"
+
+
+async def test_a_missing_narrative_is_rejected_and_the_reason_reaches_the_model(tmp_path):
+    loop, result, calls = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL]),
+        ModelResponse(report=REPORT),
+    )
+
+    rejected = [o.error for o in result.observations if o.error]
+    assert rejected == ["Notes rejected: record_memory is required on every turn that calls a capability"]
+    assert calls == ["probe"]
+
+
+async def test_a_narrative_missing_a_field_names_the_field(tmp_path):
+    bad = {"understanding": "u", "hypotheses": [], "open_questions": []}
+    _, result, _ = await run_loop(
+        tmp_path, ModelResponse(tool_calls=[CALL], memory_update=bad), ModelResponse(report=REPORT)
+    )
+
+    assert "candidates" in [o.error for o in result.observations if o.error][0]
+
+
+async def test_a_rejected_narrative_keeps_the_capability_result_and_does_not_rerun_it(tmp_path):
+    _, result, calls = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update={"nope": 1}),
+        ModelResponse(report=REPORT),
+    )
+
+    assert calls == ["probe"]
+    assert result.observations[0].success
+    assert result.metadata["tool_calls"] == 1
+
+
+async def test_a_valid_report_survives_a_malformed_narrative(tmp_path):
+    _, result, _ = await run_loop(
+        tmp_path, ModelResponse(report=REPORT, memory_update={"nope": 1})
+    )
+
+    assert result.completion_reason == "reported"
+
+
+async def test_a_narrative_leaves_unmentioned_hypotheses_alone(tmp_path):
+    memory = await memory_after(
+        tmp_path,
+        notes(hypotheses=[hypothesis("H1"), hypothesis("H2", statement="injects")]),
+        notes(hypotheses=[{"id": "H2", "confidence": 0.9}]),
+    )
+
+    by_id = {h.id: h for h in memory.hypotheses}
+    assert by_id["H1"].confidence == 0.6
+    assert by_id["H2"].confidence == 0.9 and by_id["H2"].statement == "injects"
+
+
+async def test_closing_by_identifier_removes_an_entry(tmp_path):
+    memory = await memory_after(
+        tmp_path, notes(hypotheses=[hypothesis()]), notes(close=["H1"])
+    )
+
+    assert memory.hypotheses == []
+
+
+def test_closing_an_unknown_identifier_is_rejected():
+    from mira.reasoning.contracts.memory import WorkingMemory
+    from mira.reasoning.runtime.narrative import apply_narrative
+
+    memory = WorkingMemory()
+    assert apply_narrative(memory, notes(hypotheses=[hypothesis()]), []) == ""
+
+    failure = apply_narrative(memory, notes(close=["H9"]), [])
+
+    assert "H9" in failure
+    assert [h.id for h in memory.hypotheses] == ["H1"]
+
+
+async def test_a_hypothesis_citing_unknown_evidence_is_rejected_whole(tmp_path):
+    memory = await memory_after(
+        tmp_path, notes(understanding="u", hypotheses=[hypothesis(supporting_evidence=["E7"])])
+    )
+
+    assert memory.hypotheses == [] and memory.understanding == ""
+
+
+async def test_empty_collections_are_accepted_and_change_nothing(tmp_path):
+    memory = await memory_after(tmp_path, notes(hypotheses=[hypothesis()]), notes())
+
+    assert [h.id for h in memory.hypotheses] == ["H1"]
+
+
+async def test_alternating_rejected_and_accepted_narratives_still_terminate(tmp_path):
+    good = ModelResponse(tool_calls=[CALL], memory_update=NOTES)
+    bad = ModelResponse(tool_calls=[CALL], memory_update={"nope": 1})
+    model = ScriptedModel(bad, good, bad, good, bad, good, bad, good)
+    calls, executor = counting_executor()
+    loop = build_loop(model, tmp_path, tools=[PROBE], executor=executor)
+
+    result = await loop.run(Objective(description="o"), build_definition(tools=[PROBE]))
+
+    assert result.completion_reason == "degraded"
+    assert result.metadata["turns"] < 10
+
+
+async def test_rejections_do_not_spend_the_capability_budget(tmp_path):
+    _, result, _ = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update={"nope": 1}),
+        ModelResponse(report=REPORT),
+    )
+
+    assert result.metadata["tool_calls"] == 1
+    assert len([o for o in result.observations]) == 2
+
+
+async def test_a_rejection_is_announced_to_the_observer(tmp_path):
+    events = []
+    calls, executor = counting_executor()
+    loop = build_loop(
+        ScriptedModel(ModelResponse(tool_calls=[CALL]), ModelResponse(report=REPORT)),
+        tmp_path, tools=[PROBE], executor=executor, on_turn=events.append,
+    )
+
+    await loop.run(Objective(description="o"), build_definition(tools=[PROBE]))
+
+    assert [e["kind"] for e in events] == ["tool_calls", "memory_rejected", "report"]

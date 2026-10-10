@@ -11,12 +11,14 @@ from ..contracts.state import State
 from ..contracts.tool import ToolCall, ToolResult, ToolSpec
 from ..definition.agent import AgentDefinition
 from ..model.adapter import ModelAdapter
-from .completion import CompletionChecker
+from .completion import MAX_MEMORY_REJECTIONS, CompletionChecker
 from .context import ContextBuilder
+from .narrative import apply_narrative
 from .tool_runtime import ToolRuntime
 from .trace import Tracer
 
 REPORT_TOOL_CALL_ID = "submit_report"
+MEMORY_TOOL_CALL_ID = "record_memory"
 
 
 class AgentLoop:
@@ -84,7 +86,7 @@ class AgentLoop:
             )
             state.record_usage(response.usage)
 
-            if response.report is None and not response.tool_calls:
+            if response.report is None and not response.tool_calls and response.memory_update is None:
                 self.completion.record_empty_response()
                 self.tracer.turn(context_str, response, [], [], state.snapshot(), token_usage=response.usage)
                 self._notify({"kind": "empty", "turn": state.turn_count + 1})
@@ -105,6 +107,12 @@ class AgentLoop:
                 calls.append(tool_call)
                 results.append(tool_result)
 
+            # After the calls, so a rejected narrative cannot unwind a result or
+            # the evidence minted from it. A report-only turn owes no narrative.
+            memory_failure = ""
+            if calls or response.memory_update is not None:
+                memory_failure = self._merge_narrative(state, response.memory_update)
+
             report, failure = None, ""
             if response.report is not None:
                 report, failure = self._parse_report(response.report, state, agent_def)
@@ -116,6 +124,8 @@ class AgentLoop:
                 self.tracer.turn(context_str, response, calls, results, state.snapshot(), token_usage=response.usage)
             if calls:
                 self._notify({"kind": "tool_calls", "turn": state.turn_count + 1, "calls": calls, "results": results, "usage": response.usage})
+            if memory_failure:
+                self._notify({"kind": "memory_rejected", "turn": state.turn_count + 1, "failure": memory_failure})
             if report is not None:
                 self._notify({"kind": "report", "turn": state.turn_count + 1, "report": report})
                 return report
@@ -132,6 +142,30 @@ class AgentLoop:
             metadata=self._metadata(state),
             observations=self._observations(state),
         )
+
+    def _merge_narrative(self, state: State, update: Optional[dict]) -> str:
+        """Merge the turn's narrative; on rejection tell the model why."""
+        if update is None:
+            failure = "record_memory is required on every turn that calls a capability"
+        else:
+            failure = apply_narrative(
+                state.working_memory, update, {item.id for item in state.evidence}
+            )
+        if failure:
+            self.completion.record_memory_rejection()
+            state.record_harness_observation(
+                ToolCall(
+                    tool_call_id=MEMORY_TOOL_CALL_ID,
+                    name=MEMORY_TOOL_CALL_ID,
+                    arguments=update if isinstance(update, dict) else {},
+                ),
+                ToolResult(
+                    tool_call_id=MEMORY_TOOL_CALL_ID,
+                    success=False,
+                    error=f"Notes rejected: {failure}",
+                ),
+            )
+        return failure
 
     def _record_report_failure(self, state: State, report: str, failure: str) -> None:
         """Feed a malformed report back as an observation, not an exception."""
@@ -219,6 +253,8 @@ class AgentLoop:
 
     def _completion_reason(self, state: State, agent_def: AgentDefinition) -> str:
         if self.completion.consecutive_empty_responses >= 2:
+            return "degraded"
+        if self.completion.memory_rejections >= MAX_MEMORY_REJECTIONS:
             return "degraded"
         if state.tool_call_count >= agent_def.max_tool_calls:
             return "limit_calls"
