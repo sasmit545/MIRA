@@ -321,6 +321,8 @@ async def test_a_report_does_not_discard_a_capability_call_in_the_same_turn(tmp_
 
 PROBE = ToolSpec(name="probe", description="d", parameters={})
 CALL = ToolCall(tool_call_id="1", name="probe", arguments={})
+# Different arguments, so the harness runs it rather than refusing a rerun.
+NEXT_CALL = ToolCall(tool_call_id="2", name="probe", arguments={"page": 2})
 
 
 def hypothesis(id="H1", **fields):
@@ -388,13 +390,27 @@ async def test_a_status_differing_in_case_or_whitespace_is_coerced(tmp_path):
 async def test_a_missing_narrative_is_rejected_and_the_reason_reaches_the_model(tmp_path):
     loop, result, calls = await run_loop(
         tmp_path,
-        ModelResponse(tool_calls=[CALL]),
+        ModelResponse(tool_calls=[CALL], memory_update=NOTES),
+        ModelResponse(tool_calls=[NEXT_CALL]),
         ModelResponse(report=REPORT),
     )
 
     rejected = [o.error for o in result.observations if o.error]
     assert len(rejected) == 1
     assert rejected[0].startswith("Notes rejected: record_memory is required on every turn that calls a capability")
+    assert calls == ["probe", "probe"]
+
+
+async def test_the_first_capability_turn_owes_no_notes(tmp_path):
+    """Notes reflect results through the previous turn; turn 1 has none."""
+    loop, result, calls = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL]),
+        ModelResponse(report=REPORT),
+    )
+
+    assert loop.completion.memory_rejections == 0
+    assert result.completion_reason == "reported"
     assert calls == ["probe"]
 
 
@@ -516,10 +532,14 @@ async def test_a_rejection_is_announced_to_the_observer(tmp_path):
     events = []
     calls, executor = counting_executor()
     loop = build_loop(
-        ScriptedModel(ModelResponse(tool_calls=[CALL]), ModelResponse(report=REPORT)),
+        ScriptedModel(
+            ModelResponse(tool_calls=[CALL], memory_update=NOTES),
+            ModelResponse(tool_calls=[NEXT_CALL]),
+            ModelResponse(report=REPORT),
+        ),
         tmp_path, tools=[PROBE], executor=executor, on_turn=events.append,
     )
 
     await loop.run(Objective(description="o"), build_definition(tools=[PROBE]))
 
-    assert [e["kind"] for e in events] == ["tool_calls", "memory_rejected", "report"]
+    assert [e["kind"] for e in events] == ["tool_calls", "notes", "tool_calls", "memory_rejected", "report"]

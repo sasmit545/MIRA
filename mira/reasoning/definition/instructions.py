@@ -34,6 +34,7 @@ def assemble_instructions(
         "Working notes:",
         "Your notes are your only memory between turns: raw tool output is not repeated in later prompts.",
         "Call record_memory in the same response as every capability call; a turn that calls a capability without it has its notes rejected.",
+        "This holds even when nothing changed and even when you also call recall_observation: send empty lists rather than skipping the call.",
         "Notes are additive: reuse an id to revise an entry, leave an entry out to keep it unchanged, and list ids in close to remove resolved or obsolete ones.",
         "Write your interpretation, not a copy of tool output, and cite evidence identifiers (E1, E2, ...) for hypotheses.",
         "",

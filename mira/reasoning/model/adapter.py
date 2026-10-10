@@ -218,7 +218,8 @@ def _memory_declaration() -> dict:
         "name": MEMORY_TOOL,
         "description": (
             "Record your working notes. Call this every turn, in the same response "
-            "as your capability call. Entries you omit are left unchanged."
+            "as your capability call, even when nothing changed (send empty lists) "
+            "and even when you also recall. Entries you omit are left unchanged."
         ),
         "parameters": {
             "type": "object",

@@ -85,6 +85,11 @@ def render_state(state: State) -> str:
         lines.append("Findings so far:")
         for finding in state.findings:
             lines.append(f"  - {finding.title}: {finding.description}")
+
+    # Last, where a model weighs it most: the rule the live run saw dropped
+    # under a long prompt.
+    lines.append("")
+    lines.append("Reminder: any response that calls a capability must also call record_memory (empty lists are fine).")
     return "\n".join(lines)
 
 

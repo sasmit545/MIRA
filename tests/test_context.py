@@ -249,3 +249,11 @@ def test_a_huge_successful_result_barely_grows_the_prompt():
     assert "[test_run#file_info#0]" in context
     assert "partial digest" in context
     assert "A" * 100 not in context
+
+
+def test_the_notes_rule_closes_the_prompt_and_covers_the_empty_case():
+    """A live model dropped the notes when it had nothing new or was recalling."""
+    context = ContextBuilder.build(build_state(), build_definition())
+
+    assert context.rstrip().splitlines()[-1].startswith("Reminder: any response that calls a capability must also call record_memory")
+    assert "even when nothing changed and even when you also call recall_observation" in context

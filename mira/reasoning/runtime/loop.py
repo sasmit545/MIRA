@@ -103,6 +103,10 @@ class AgentLoop:
             # Capabilities run before a sibling report is judged: the report may
             # cite evidence these calls just minted, and dropping them would
             # discard work already requested.
+            # Notes reflect results through the previous turn (R7). Before any
+            # capability has returned there is nothing to note, so the very
+            # first capability turn owes none; notes it does send still merge.
+            notes_owed = bool(capability_history(state))
             calls: list[ToolCall] = []
             results: list[ToolResult] = []
             recalls = 0
@@ -148,7 +152,7 @@ class AgentLoop:
             # After the calls, so a rejected narrative cannot unwind a result or
             # the evidence minted from it. A report-only turn owes no narrative.
             memory_failure = ""
-            if calls or response.memory_update is not None:
+            if (calls and notes_owed) or response.memory_update is not None:
                 memory_failure = self._merge_narrative(state, response.memory_update)
 
             report, failure = None, ""

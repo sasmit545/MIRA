@@ -188,7 +188,8 @@ SALVAGED = '{"summary": "salvaged", "verdict": "suspicious", "findings": []}'
 async def test_a_run_ended_by_rejected_notes_still_gets_its_report(tmp_path):
     model, state, result, _ = await run(
         tmp_path,
-        ModelResponse(tool_calls=[call("detect_packer")]),  # no notes: rejection 1
+        ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
+        ModelResponse(tool_calls=[call("extract_strings")]),  # no notes: rejection 1
         MALFORMED,  # 2
         MALFORMED,  # 3: the bound trips
         ModelResponse(report=SALVAGED),
@@ -197,31 +198,33 @@ async def test_a_run_ended_by_rejected_notes_still_gets_its_report(tmp_path):
     assert (result.summary, result.verdict) == ("salvaged", "suspicious")
     # Still degraded: the notes lag the results, so nothing will be promoted.
     assert result.completion_reason == "degraded"
-    assert result.evidence == ["E1"]
+    assert "E1" in result.evidence
     assert "Run ending: notes were rejected 3 times" in model.contexts[-1]
     assert model.offered[-1] == []  # no capability on offer
-    assert result.metadata["turns"] == 4
+    assert result.metadata["turns"] == 5
 
 
 async def test_no_report_on_the_final_turn_ends_inconclusive(tmp_path):
     model, _, result, _ = await run(
         tmp_path,
-        ModelResponse(tool_calls=[call("detect_packer")]),
+        ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
+        ModelResponse(tool_calls=[call("extract_strings")]),
         MALFORMED,
     )
 
-    assert len(model.contexts) == 4  # three rejected turns, one final
+    assert len(model.contexts) == 5  # one accepted, three rejected, one final
     assert (result.verdict, result.completion_reason) == ("inconclusive", "degraded")
 
 
 async def test_the_rejection_says_what_to_send(tmp_path):
     model, *_ = await run(
         tmp_path,
-        ModelResponse(tool_calls=[call("detect_packer")]),
+        ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
+        ModelResponse(tool_calls=[call("extract_strings")]),
         ModelResponse(report=REPORT),
     )
 
-    assert "Send a record_memory call in the same response" in model.contexts[1]
+    assert "Send a record_memory call in the same response" in model.contexts[2]
 
 
 # --- Observers see the notes and the recalls as they happen

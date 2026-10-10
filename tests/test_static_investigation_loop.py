@@ -151,8 +151,14 @@ async def test_a_run_with_no_report_still_returns_a_well_formed_message(tmp_path
     assert finding.recommended_actions == []
 
 
-@pytest.mark.parametrize("notes", [None, {"hypotheses": "not a list"}], ids=["omitted", "malformed"])
-async def test_a_model_that_never_writes_valid_notes_stops_on_the_rejection_bound(tmp_path, notes):
+@pytest.mark.parametrize(
+    "notes, calls",
+    # Omitted notes are not owed on the first capability turn; sent ones are
+    # always checked, so malformed notes are rejected from turn 1.
+    [(None, MAX_MEMORY_REJECTIONS + 1), ({"hypotheses": "not a list"}, MAX_MEMORY_REJECTIONS)],
+    ids=["omitted", "malformed"],
+)
+async def test_a_model_that_never_writes_valid_notes_stops_on_the_rejection_bound(tmp_path, notes, calls):
     """Ends on the total bound, not by exhausting its turns."""
     client = ScriptedClient()
     objective = StaticCoordinator().select_next_objective([])
@@ -162,7 +168,7 @@ async def test_a_model_that_never_writes_valid_notes_stops_on_the_rejection_boun
         client, model=NoNotesModel("file_info", notes), trace_dir=tmp_path, max_turns=10
     ).investigate(objective, "sample-1", state=state)
 
-    assert len(client.calls) == MAX_MEMORY_REJECTIONS
+    assert len(client.calls) == calls
     assert finding.assessment.startswith("inconclusive:")
     assert state.hypotheses == []
 
