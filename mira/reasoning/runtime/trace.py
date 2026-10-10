@@ -9,7 +9,7 @@ from typing import Iterable, Iterator, List, Dict, Any, Optional, Tuple
 from ..contracts.tool import ToolCall, ToolResult
 from ..contracts.model import ModelResponse
 from ..contracts.state import State
-from .payload import MAX_DIGEST_CHARS, MAX_OBSERVATION_CHARS, digest, truncate  # noqa: F401 - re-exported
+from .payload import MAX_DIGEST_CHARS, MAX_OBSERVATION_CHARS, digest, list_arrays, truncate  # noqa: F401 - re-exported
 
 
 PROVENANCE_SEPARATOR = "#"
@@ -94,6 +94,8 @@ class CapabilityRecord:
     error: Optional[str]
     digest: str  # empty for a failure: the error is what it produced
     evidence: Tuple[str, ...] = ()  # ids minted from this call: what the specialist read out of it
+    shown: Tuple[str, ...] = ()  # per array, the items recalls have shown (R10)
+    covered: Optional[Tuple[int, int]] = None  # the item range [start, end) a collected call fetched (KTD2)
 
 
 def capability_history(state: State) -> List[CapabilityRecord]:
@@ -103,18 +105,49 @@ def capability_history(state: State) -> List[CapabilityRecord]:
         provenance = getattr(item, "provenance", None)
         if provenance:
             minted.setdefault(provenance, []).append(item.id)
-    return [
-        CapabilityRecord(
-            handle=trace_provenance(state.run_id, name, occurrence),
+    records = []
+    for name, occurrence, call, result in _numbered(_live_pairs(state)):
+        handle = trace_provenance(state.run_id, name, occurrence)
+        records.append(CapabilityRecord(
+            handle=handle,
             name=name,
             arguments=dict(call.arguments),
             success=result.success,
             error=result.error,
             digest=digest(result.output) if result.success else "",
-            evidence=tuple(minted.get(trace_provenance(state.run_id, name, occurrence), ())),
-        )
-        for name, occurrence, call, result in _numbered(_live_pairs(state))
-    ]
+            evidence=tuple(minted.get(handle, ())),
+            shown=_shown(state.shown_items.get(handle) or {}, result.output),
+            covered=_covered(result),
+        ))
+    return records
+
+
+def _shown(paths: Dict[str, set], output: Any) -> Tuple[str, ...]:
+    lengths = dict(list_arrays(output))
+    return tuple(
+        f"shown {path}: {_ranges(sorted(indices))} ({len(indices)}"
+        + (f" of {lengths[path]})" if path in lengths else ")")
+        for path, indices in paths.items()
+    )
+
+
+def _ranges(indices: List[int]) -> str:
+    """0, 1, 2, 7 -> "0..2, 7"."""
+    spans: List[List[int]] = []
+    for index in indices:
+        if spans and index == spans[-1][1] + 1:
+            spans[-1][1] = index
+        else:
+            spans.append([index, index])
+    return ", ".join(f"{start}..{end}" if end > start else str(start) for start, end in spans)
+
+
+def _covered(result: ToolResult) -> Optional[Tuple[int, int]]:
+    metadata = result.output.get("metadata") if result.success and isinstance(result.output, dict) else None
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("fetched"), int):
+        return None
+    start = metadata.get("offset") or 0
+    return start, start + metadata["fetched"]
 
 
 def _parse_provenance(provenance: str) -> Optional[Tuple[str, str, int]]:

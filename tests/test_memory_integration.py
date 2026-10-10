@@ -191,7 +191,10 @@ async def test_citing_an_id_the_run_never_minted_leaves_the_notes_untouched(tmp_
 
 # --- The rejection bound ends in one report-only turn, not in nothing
 
-MALFORMED = ModelResponse(memory_update={"hypotheses": "not a list"})
+def malformed(n):
+    """A capability call that ran (progress, KTD8) with notes that cannot merge."""
+    return ModelResponse(tool_calls=[ToolCall(f"m{n}", "extract_strings", {"min_length": n})],
+                         memory_update={"hypotheses": "not a list"})
 SALVAGED = '{"summary": "salvaged", "verdict": "suspicious", "findings": []}'
 
 
@@ -200,8 +203,8 @@ async def test_a_run_ended_by_rejected_notes_still_gets_its_report(tmp_path):
         tmp_path,
         ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
         ModelResponse(tool_calls=[call("extract_strings")]),  # no notes: rejection 1
-        MALFORMED,  # 2
-        MALFORMED,  # 3: the bound trips
+        malformed(1),  # 2
+        malformed(2),  # 3: the bound trips
         ModelResponse(report=SALVAGED),
     )
 
@@ -219,7 +222,7 @@ async def test_no_report_on_the_final_turn_ends_inconclusive(tmp_path):
         tmp_path,
         ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
         ModelResponse(tool_calls=[call("extract_strings")]),
-        MALFORMED,
+        malformed(1),  # replayed: its rerun is refused, and its notes are rejection 3
     )
 
     assert len(model.contexts) == 5  # one accepted, three rejected, one final
@@ -243,7 +246,8 @@ async def test_the_rejection_says_what_to_send(tmp_path):
 def recall_and(name, offset):
     handle = trace_provenance(RUN, "detect_packer", 0)
     return ModelResponse(tool_calls=[
-        ToolCall("r", "recall_observation", {"handle": handle}),
+        # A different part each time: a repeated recall shows nothing new (KTD8).
+        ToolCall("r", "recall_observation", {"handle": handle, "path": ("data.packer", "data.confidence")[offset - 1]}),
         ToolCall(name, name, {"offset": offset}),  # fresh arguments: not a refused rerun
     ])
 
@@ -293,16 +297,17 @@ RECALL_ONLY = ModelResponse(tool_calls=[
 ])
 
 
-async def test_a_model_that_only_recalls_is_stopped_by_the_rejection_bound(tmp_path):
-    """A live run re-read the same results for seven turns without a note."""
+async def test_a_model_that_only_rereads_is_stopped_after_two_repeats(tmp_path):
+    """A live run re-read the same results for seven turns without a note. A
+    repeat is now answered with a pointer and is not progress (R11)."""
     model, _, result, loop = await run(
         tmp_path,
         ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
-        RECALL_ONLY,  # turn 2: notes now pending; turns 3-5 are rejected
+        RECALL_ONLY,  # turn 2 shows it; turns 3 and 4 repeat it
     )
 
-    assert loop.completion.memory_rejections == 3
-    assert len(model.contexts) == 5 + 1  # well inside max_turns=10, plus the final turn
+    assert loop.completion.memory_rejections == 0  # a repeat owes no notes
+    assert len(model.contexts) == 4  # no report-only turn: the model went quiet
     assert result.completion_reason == "degraded"
 
 
@@ -323,7 +328,8 @@ async def test_notes_after_a_recall_pay_what_it_owed(tmp_path):
 async def test_a_run_out_of_turns_still_gets_a_report(tmp_path):
     model, _, result, _ = await run(
         tmp_path,
-        *[ModelResponse(memory_update=notes())] * 10,  # max_turns=10, never reports
+        # Notes that change every turn are progress (KTD8), so only max_turns=10 ends it.
+        *[ModelResponse(memory_update=notes(understanding=f"step {n}")) for n in range(10)],
         ModelResponse(report=SALVAGED),
     )
 
@@ -408,7 +414,7 @@ def ending_with(final):
     """One evidence-minting turn, nine more until max_turns, then the final turn."""
     return (
         ModelResponse(tool_calls=[call("detect_packer")], memory_update=notes()),
-        *[ModelResponse(memory_update=notes())] * 9,
+        *[ModelResponse(memory_update=notes(understanding=f"step {n}")) for n in range(9)],
         final,
     )
 

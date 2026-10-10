@@ -188,6 +188,8 @@ class RepeatingModel:
         self.turns += 1
         call = ToolCall(tool_call_id=str(self.turns), name="file_info", arguments={})
         notes = dict(EMPTY_NOTES) if self.turns == 1 else self.repeat_notes
+        if callable(notes):
+            notes = notes(self.turns)
         return ModelResponse(tool_calls=[call], memory_update=notes)
 
 
@@ -206,9 +208,21 @@ async def test_a_model_that_only_repeats_a_call_ends_degraded_not_at_max_turns(t
     assert finding.assessment.startswith("inconclusive:")
 
 
-async def test_a_repeat_sent_with_notes_is_still_progress(tmp_path):
-    """The model is still reasoning, so only the turn limit bounds it."""
+async def test_a_repeat_with_unchanged_notes_is_not_progress(tmp_path):
+    """Refused reruns and notes that change nothing did nothing (KTD8)."""
     model = RepeatingModel(repeat_notes=dict(EMPTY_NOTES))
+    objective = StaticCoordinator().select_next_objective([])
+
+    await StaticAgent(ScriptedClient(), model=model, trace_dir=tmp_path, max_turns=5).investigate(
+        objective, "sample-1"
+    )
+
+    assert model.turns == 3
+
+
+async def test_a_repeat_sent_with_new_notes_is_still_progress(tmp_path):
+    """The model is still reasoning, so only the turn limit bounds it."""
+    model = RepeatingModel(repeat_notes=lambda turn: {**EMPTY_NOTES, "understanding": f"Reconsidered on turn {turn}."})
     objective = StaticCoordinator().select_next_objective([])
 
     await StaticAgent(ScriptedClient(), model=model, trace_dir=tmp_path, max_turns=5).investigate(

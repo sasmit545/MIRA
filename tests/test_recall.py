@@ -278,9 +278,9 @@ def _state():
 def test_repeated_and_failed_calls_keep_distinct_handles_for_recall():
     state = _state()
 
-    failed = _recall(state, {"handle": trace_provenance(RUN, "extract_strings", 0)})
-    found = _recall(state, {"handle": trace_provenance(RUN, "extract_strings", 1), "contains": ["evil"]})
-    clean = _recall(state, {"handle": trace_provenance(RUN, "extract_strings", 2), "contains": ["evil"]})
+    failed = _recall(state, {"handle": trace_provenance(RUN, "extract_strings", 0)})[0]
+    found = _recall(state, {"handle": trace_provenance(RUN, "extract_strings", 1), "contains": ["evil"]})[0]
+    clean = _recall(state, {"handle": trace_provenance(RUN, "extract_strings", 2), "contains": ["evil"]})[0]
 
     assert "that call failed" in failed and "TIMEOUT" in failed
     assert URL in found
@@ -299,7 +299,7 @@ def test_repeated_and_failed_calls_keep_distinct_handles_for_recall():
     ],
 )
 def test_a_bad_recall_is_an_explicit_failure(arguments, expected):
-    answer = _recall(_state(), arguments)
+    answer = _recall(_state(), arguments)[0]
 
     assert "failed" in answer and expected in answer
 

@@ -624,3 +624,187 @@ async def test_a_salvaged_report_counts_its_discarded_findings(tmp_path):
 
     assert len(result.findings) == 1
     assert result.metadata["findings_discarded"] == 1
+
+
+# --- Retrieval ledger, repeats, and progress (KTD7-KTD9) ------------------
+
+from mira.reasoning.contracts.state import State
+from mira.reasoning.contracts.tool import ToolResult
+from mira.reasoning.runtime.loop import _recall
+from mira.reasoning.runtime.payload import recall_fingerprint
+
+IMPORTS_SPEC = ToolSpec(
+    name="list_imports", description="d",
+    parameters={"type": "object", "properties": {"offset": {"type": "integer", "default": 0}}},
+)
+
+
+def collected(fetched=412, total=412, offset=0):
+    metadata = {"capability": "list_imports", "offset": offset, "total": total,
+                "fetched": fetched, "unfetched": total - fetched, "has_more": offset + fetched < total}
+    if metadata["has_more"]:
+        metadata["next_offset"] = offset + fetched
+    rows = [{"dll": "KERNEL32.dll", "name": f"Fn{index}"} for index in range(offset, offset + fetched)]
+    return {"status": "ok", "data": {"imports": rows}, "metadata": metadata}
+
+
+def imports_call(id, **arguments):
+    return ToolCall(tool_call_id=id, name="list_imports", arguments=arguments)
+
+
+def recall_imports(**arguments):
+    return ToolCall(tool_call_id="r", name="recall_observation",
+                    arguments={"handle": "test#list_imports#0", "path": "data.imports", **arguments})
+
+
+async def run_imports(tmp_path, *responses, output=None, evidence=None):
+    calls = []
+
+    def executor(name, arguments):
+        calls.append(arguments)
+        return output or collected()
+
+    model = ScriptedModel(*responses)
+    loop = build_loop(model, tmp_path, tools=[IMPORTS_SPEC], executor=executor)
+    result = await loop.run(Objective(description="o"), build_definition(tools=[IMPORTS_SPEC]), evidence=evidence)
+    return loop, result, calls
+
+
+def test_a_fingerprint_ignores_argument_order_and_search_case():
+    one = recall_fingerprint({"handle": "h", "path": "data.imports", "contains": ["VirtualAlloc"]})
+    two = recall_fingerprint({"contains": ["virtualalloc "], "path": "data.imports", "handle": "h"})
+
+    assert one == two
+    assert one != recall_fingerprint({"handle": "h", "path": "data.imports", "contains": ["other"]})
+
+
+async def test_a_repeated_recall_gets_a_pointer_and_no_items(tmp_path):
+    seen = []
+
+    class Watching(ScriptedModel):
+        def generate(self, context, tools, force=None):
+            seen.append(context)
+            return super().generate(context, tools, force)
+
+    model = Watching(
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(offset=0, limit=3)], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(limit=3, offset=0)], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+    loop = build_loop(model, tmp_path, tools=[IMPORTS_SPEC], executor=lambda name, arguments: collected())
+    result = await loop.run(Objective(description="o"), build_definition(tools=[IMPORTS_SPEC]))
+
+    assert "[0] " in seen[2]
+    assert "already answered on turn 2" in seen[3] and "[0] " not in seen[3]
+    assert result.metadata["repeat_recalls"] == 1
+
+
+async def test_a_model_that_only_repeats_a_recall_ends_degraded_after_two_turns(tmp_path):
+    _, result, _ = await run_imports(
+        tmp_path,
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(limit=5)], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(limit=5)], memory_update=NOTES),
+    )
+
+    assert result.completion_reason == "degraded"
+    assert result.metadata["turns"] == 4
+
+
+def test_a_recall_of_items_already_shown_is_served_but_is_not_progress():
+    state = State(objective=Objective(description="o"), run_id="test")
+    state.record_tool_call(imports_call("1"))
+    state.record_tool_result(ToolResult("1", success=True, output=collected()))
+
+    first, first_new = _recall(state, recall_imports(offset=0, limit=10).arguments)
+    again, again_new = _recall(state, recall_imports(where={"name": "Fn5"}).arguments)
+    later, later_new = _recall(state, recall_imports(offset=400).arguments)
+
+    assert first_new and "[9] " in first
+    assert not again_new and "[5] " in again
+    assert later_new
+    assert state.shown_items["test#list_imports#0"]["data.imports"] == set(range(10)) | set(range(400, 412))
+
+
+async def test_a_refused_repeat_recall_owes_no_notes(tmp_path):
+    loop, result, _ = await run_imports(
+        tmp_path,
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(limit=5)], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(limit=5)]),  # a repeat: nothing new to note
+        ModelResponse(tool_calls=[imports_call("2", offset=500)], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+
+    assert loop.completion.memory_rejections == 0
+    assert result.metadata["model_calls"] == 5  # no forced notes call
+
+
+async def test_recalls_add_no_evidence(tmp_path):
+    _, result, _ = await run_imports(
+        tmp_path,
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(limit=5), recall_imports(group_by="dll")], memory_update=NOTES),
+        ModelResponse(report=report(FINDING)),
+        evidence=gathered("E1"),
+    )
+
+    assert result.evidence == ["E1"]
+
+
+async def test_a_call_equal_after_filling_defaults_is_not_rerun(tmp_path):
+    _, result, calls = await run_imports(
+        tmp_path,
+        ModelResponse(tool_calls=[imports_call("1", offset=0)], memory_update=NOTES),
+        ModelResponse(tool_calls=[imports_call("2")], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+
+    assert len(calls) == 1
+    assert result.metadata["reruns_refused"] == 1
+
+
+async def test_a_call_inside_a_collected_range_points_to_recall(tmp_path):
+    _, result, calls = await run_imports(
+        tmp_path,
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[imports_call("2", offset=300)], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+
+    assert len(calls) == 1
+    refusal = result.observations[1].error
+    assert "recall_observation" in refusal and "offset=300" in refusal and "test#list_imports#0" in refusal
+
+
+async def test_a_call_past_a_truncated_collection_runs(tmp_path):
+    _, _, calls = await run_imports(
+        tmp_path,
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[imports_call("2", offset=10_000)], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+        output=collected(fetched=10_000, total=12_000),
+    )
+
+    assert calls == [{}, {"offset": 10_000}]
+
+
+async def test_a_failed_call_is_retried_with_the_same_arguments(tmp_path):
+    outcomes = [RuntimeError("worker died"), collected()]
+
+    def executor(name, arguments):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    model = ScriptedModel(
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[imports_call("2")], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+    loop = build_loop(model, tmp_path, tools=[IMPORTS_SPEC], executor=executor)
+    result = await loop.run(Objective(description="o"), build_definition(tools=[IMPORTS_SPEC]))
+
+    assert outcomes == [] and result.metadata["tool_calls"] == 2

@@ -227,6 +227,29 @@ def select(output: Any, arguments: Dict[str, Any]) -> Selection:
     return Selection("\n".join([header, *lines]), "", path or "", tuple(shown))
 
 
+def recall_fingerprint(arguments: Dict[str, Any]) -> str:
+    """One recall's identity: queries that select the same thing match, whatever
+    their argument order, defaulted offset, or the case of their text."""
+    query, failure = _recall_arguments(arguments)
+    if failure:
+        return _serialize(arguments)
+    where = {
+        field: [_fold(option) for option in wanted] if isinstance(wanted, list) else _fold(wanted)
+        for field, wanted in (query["where"] or {}).items()
+    }
+    return _serialize({
+        **query,
+        "handle": arguments.get("handle"),
+        "offset": query["offset"] or 0,
+        "contains": sorted(set(query["contains"])) if query["contains"] else None,
+        "where": where or None,
+    })
+
+
+def _fold(value: Any) -> Any:
+    return value.casefold() if isinstance(value, str) else value
+
+
 def _grouped(header: str, matched: list, field: str, limit: Optional[int]) -> str:
     """Value counts of one field over the matched items, most common first."""
     counts = Counter(_serialize(item.get(field)) if isinstance(item, dict) else "null" for _, item in matched)

@@ -63,6 +63,7 @@ def render_state(state: State) -> str:
             lines.append(f"      -> evidence: {', '.join(record.evidence)}")
         for line in record.digest.splitlines():
             lines.append(f"      | {line}")
+        lines.extend(f"      -> {line}" for line in record.shown)
 
     if state.recalled:
         lines.append("")

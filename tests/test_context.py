@@ -270,3 +270,19 @@ def test_the_notes_rule_closes_the_prompt_and_covers_the_empty_case():
     assert context.rstrip().splitlines()[-1].startswith("Reminder: any response that calls a capability must also call record_memory")
     assert "even when nothing changed: send empty lists" in context
     assert "never two such turns in a row" in context
+
+
+def test_the_history_shows_which_items_recalls_have_shown():
+    from mira.reasoning.runtime.loop import _recall
+
+    state = build_state()
+    rows = [{"dll": "KERNEL32.dll", "name": f"Fn{index}"} for index in range(412)]
+    state.record_tool_call(ToolCall(tool_call_id="1", name="file_info", arguments={}))
+    state.record_tool_result(ToolResult(tool_call_id="1", success=True, output={"data": {"imports": rows}}))
+    handle = "test_run#file_info#0"
+    _recall(state, {"handle": handle, "path": "data.imports", "limit": 50})
+    _recall(state, {"handle": handle, "path": "data.imports", "offset": 400})
+
+    context = ContextBuilder.build(state, build_definition())
+
+    assert "shown data.imports: 0..49, 400..411 (62 of 412)" in context

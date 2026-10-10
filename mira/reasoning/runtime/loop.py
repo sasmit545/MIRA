@@ -3,7 +3,7 @@
 import copy
 import dataclasses
 import json
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from ..contracts.finding import Confidence, Evidence, Finding, Severity
 from ..contracts.model import ModelResponse
@@ -16,7 +16,7 @@ from ..model.adapter import ModelAdapter
 from .completion import MAX_MEMORY_REJECTIONS, CompletionChecker
 from .context import ContextBuilder
 from .narrative import apply_narrative
-from .payload import select
+from .payload import recall_fingerprint, select
 from .tool_runtime import ToolRuntime
 from .trace import Tracer, capability_history, live_observation
 
@@ -115,36 +115,31 @@ class AgentLoop:
             calls: list[ToolCall] = []
             results: list[ToolResult] = []
             recalls = 0
+            # Recalls that showed something new (KTD8). Only these owe notes:
+            # a repeat or an already-shown answer gave the model nothing to note.
+            fresh_recalls = 0
             recalled_handles: list = []
             for tool_call in response.tool_calls or []:
                 if tool_call.name == RECALL_TOOL_NAME:
-                    # Harness, not a capability (KTD7): off-budget, owes no notes.
+                    # Harness, not a capability (KTD7): off-budget.
                     recalls += 1
                     state.recalls_requested += 1
-                    fingerprint = _fingerprint(tool_call.arguments)
-                    if fingerprint in state.recall_fingerprints:
-                        state.repeat_recalls += 1
-                    else:
-                        state.recall_fingerprints[fingerprint] = state.turn_count + 1
                     recalled_handles.append(tool_call.arguments.get("handle"))
-                    state.recalled.append(
-                        _recall(state, tool_call.arguments)
-                        if recalls <= MAX_RECALLS_PER_TURN
-                        else f"Recall not served: at most {MAX_RECALLS_PER_TURN} per turn."
-                    )
+                    if recalls > MAX_RECALLS_PER_TURN:
+                        state.recalled.append(f"Recall not served: at most {MAX_RECALLS_PER_TURN} per turn.")
+                        continue
+                    answer, new = _recall(state, tool_call.arguments)
+                    state.recalled.append(answer)
+                    fresh_recalls += new
                     continue
-                prior = _prior_success(state, tool_call)
-                if prior is not None:
+                refusal = _prior_success(state, tool_call, self.tools.available_tools.get(tool_call.name))
+                if refusal is not None:
                     state.reruns_refused += 1
-                    # Capabilities are deterministic over one sample: rerunning an
-                    # identical call buys the same result and a duplicate evidence id.
+                    # Capabilities are deterministic over one sample: rerunning a
+                    # covered call buys the same result and a duplicate evidence id.
                     state.record_harness_observation(
                         tool_call,
-                        ToolResult(
-                            tool_call_id=tool_call.tool_call_id,
-                            success=False,
-                            error=f"Not rerun: identical to {prior}; use that result, or recall_observation for more of it.",
-                        ),
+                        ToolResult(tool_call_id=tool_call.tool_call_id, success=False, error=refusal),
                     )
                     continue
                 tool_result = await self.tools.execute(tool_call)
@@ -153,22 +148,15 @@ class AgentLoop:
                 calls.append(tool_call)
                 results.append(tool_result)
 
-            # Judged after the calls: a turn whose every call was a refused rerun
-            # did nothing, and counts as empty so a model that ignores the
-            # refusal cannot loop to max_turns. Notes or a recall are progress.
-            if calls or recalls or response.memory_update is not None or response.report is not None:
-                self.completion.record_non_empty_response()
-            else:
-                self.completion.record_empty_response()
-
             # After the calls, so a rejected narrative cannot unwind a result or
             # the evidence minted from it. A report-only turn owes no narrative.
             memory_failure = ""
+            memory_before = copy.deepcopy(state.working_memory)
             update = response.memory_update
-            owes = (calls and notes_owed) or (notes_pending and (calls or recalls))
+            owes = (calls and notes_owed) or (notes_pending and (calls or fresh_recalls))
             # Reading before writing: a turn that recalls may write its notes
             # next turn instead, but not two turns running.
-            defer = update is None and owes and recalls and not notes_pending
+            defer = update is None and owes and fresh_recalls and not notes_pending
             if update is None and owes and not defer:
                 # Asking was not enough: a live model skipped record_memory on
                 # nearly every turn. One extra call that must record the notes;
@@ -181,11 +169,20 @@ class AgentLoop:
                 notes_pending = True
             elif owes:
                 memory_failure = self._merge_narrative(state, None)
-            elif recalls:
+            elif fresh_recalls:
                 # A recall is shown once. What it showed must reach the notes on
                 # the next turn that acts, or the model forgets it and re-reads
                 # forever (a live run spent seven turns doing exactly that).
                 notes_pending = True
+
+            # Judged last (KTD8): progress is a call that ran, a recall that
+            # showed something new, a report, or notes that changed the memory.
+            # A turn of refused reruns, repeated recalls and unchanged notes did
+            # nothing, and counts as empty so it cannot loop to max_turns.
+            if calls or fresh_recalls or response.report is not None or state.working_memory != memory_before:
+                self.completion.record_non_empty_response()
+            else:
+                self.completion.record_empty_response()
 
             report, failure = None, ""
             if response.report is not None:
@@ -442,39 +439,70 @@ class AgentLoop:
         return "limit_turns"
 
 
-def _prior_success(state: State, call: ToolCall) -> Optional[str]:
-    """Handle of an earlier successful call with the same name and arguments.
-    Failures are not matched: they may be transient and worth a retry."""
+def _prior_success(state: State, call: ToolCall, spec: Optional[ToolSpec]) -> Optional[str]:
+    """Why an earlier successful call makes this one pointless, or None (KTD9).
+
+    Arguments are compared after filling the spec's defaults, so `f()` and
+    `f(offset=0)` are one call. A call whose offset falls inside the range an
+    earlier collected call fetched, all else equal, is answered by recall.
+    Failures are not matched: they may be transient and worth a retry.
+    """
+    properties = (spec.parameters.get("properties") if spec else None) or {}
+    defaults = {name: schema["default"] for name, schema in properties.items() if isinstance(schema, dict) and "default" in schema}
+    asked = {**defaults, **call.arguments}
     for record in capability_history(state):
-        if record.success and record.name == call.name and record.arguments == call.arguments:
-            return record.handle
+        if not record.success or record.name != call.name:
+            continue
+        earlier = {**defaults, **record.arguments}
+        if earlier == asked:
+            return f"Not rerun: identical to {record.handle}; use that result, or recall_observation for more of it."
+        if record.covered is None or not isinstance(asked.get("offset"), int):
+            continue
+        start, end = record.covered
+        same_otherwise = {k: v for k, v in earlier.items() if k != "offset"} == {k: v for k, v in asked.items() if k != "offset"}
+        if same_otherwise and start <= asked["offset"] < end:
+            return (
+                f"Not rerun: {record.handle} already holds items {start}..{end - 1} of this list; read them with "
+                f"recall_observation(handle={record.handle!r}, offset={asked['offset'] - start})."
+            )
     return None
 
 
-def _fingerprint(arguments: dict) -> str:
-    """One recall's identity, independent of argument order."""
-    return json.dumps(arguments, sort_keys=True, default=str)
-
-
-def _recall(state: State, arguments: dict) -> str:
-    """Answer one recall_observation, success or failure, as prompt text."""
+def _recall(state: State, arguments: dict) -> Tuple[str, bool]:
+    """Answer one recall_observation as prompt text, and whether it showed
+    anything new (KTD8). A repeat gets a pointer, not the answer again (R11)."""
     asked = ", ".join(f"{name}={value!r}" for name, value in arguments.items())
+    fingerprint = recall_fingerprint(arguments)
+    if fingerprint in state.recall_fingerprints:
+        state.repeat_recalls += 1
+        return (
+            f"recall_observation({asked}): already answered on turn {state.recall_fingerprints[fingerprint]}; "
+            "not repeated. What it showed belongs in your notes; ask for something else."
+        ), False
+    state.recall_fingerprints[fingerprint] = state.turn_count + 1
     handle = arguments.get("handle")
     if not isinstance(handle, str) or not handle:
-        return f"recall_observation({asked}) failed: handle is required, copied from the capability history."
+        return f"recall_observation({asked}) failed: handle is required, copied from the capability history.", False
     observation = live_observation(state, handle)
     if observation is None:
         return (
             f"recall_observation({asked}) failed: no capability call in this run has "
             f"handle {handle!r}; use one listed in the capability history."
-        )
+        ), False
     result = observation["result"]
     if not result.success:
-        return f"recall_observation({asked}): that call failed, and its error is all it produced: {result.error}"
+        return f"recall_observation({asked}): that call failed, and its error is all it produced: {result.error}", False
     selection = select(result.output, arguments)
     if selection.failure:
-        return f"recall_observation({asked}) failed: {selection.failure}"
-    return f"recall_observation({asked}):\n{selection.text}"
+        return f"recall_observation({asked}) failed: {selection.failure}", False
+    # The ledger (KTD7) records what was shown, apart from evidence: showing
+    # an item makes it citable no more than before.
+    shown = set(selection.shown)
+    # An aggregate or a value is new by its new question; a listing only by new items.
+    new = not shown or not shown <= state.shown_items.get(handle, {}).get(selection.path, set())
+    if shown:
+        state.shown_items.setdefault(handle, {}).setdefault(selection.path, set()).update(shown)
+    return f"recall_observation({asked}):\n{selection.text}", new
 
 
 # --- Report validation.
