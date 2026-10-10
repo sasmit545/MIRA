@@ -45,6 +45,13 @@ class FileInfoTests(unittest.TestCase):
         self.assertEqual(len(result["data"]["strings"]), 2)
         self.assertTrue(result["metadata"]["has_more"])
 
+    def test_every_page_reports_the_whole_list_size(self):
+        from mira.capabilities.static.common import paginate
+
+        pages = [paginate(list(range(250)), limit=100, offset=offset)[1] for offset in (0, 100, 200)]
+
+        self.assertEqual([page["total"] for page in pages], [250, 250, 250])
+
 
 class PESupportTests(unittest.TestCase):
     def test_a_pe_handler_does_not_hold_the_sample_open(self):

@@ -50,6 +50,15 @@ def test_every_capability_is_declared():
     assert set(declared_by_name()) == set(STATIC_CAPABILITIES) | {"submit_report", "record_memory", "recall_observation"}
 
 
+def test_a_collected_capability_hides_limit_and_keeps_offset():
+    declared = declared_by_name()
+
+    imports = declared["list_imports"]["parameters"]["properties"]
+    assert "limit" not in imports and "offset" in imports
+    assert "whole list" in declared["list_imports"]["description"]
+    assert "limit" in declared["list_exports"]["parameters"]["properties"]
+
+
 def test_a_capability_with_no_arguments_still_declares_an_object():
     assert tool_parameters({}) == {"type": "object", "properties": {}}
 

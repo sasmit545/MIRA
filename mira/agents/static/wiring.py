@@ -33,6 +33,12 @@ STATIC_SCOPE = (
     "so tool arguments never need to name it."
 )
 
+# Capabilities one call collects whole (KTD1): the data key holding the list,
+# and the item cap that bounds the walk (KTD3). The cap is a tuning knob,
+# calibrated from the benchmark like the thresholds in evidence.py.
+COLLECTED_CAPABILITIES = {"list_imports": ("imports", 10_000)}
+PAGE_SIZE = 1000  # the MCP input contracts' page bound (le=1000)
+
 
 @lru_cache(maxsize=None)
 def _capability_specs() -> tuple[ToolSpec, ...]:
@@ -43,13 +49,26 @@ def _capability_specs() -> tuple[ToolSpec, ...]:
     it is assigned. STATIC_CAPABILITIES is fixed at import, so the result is
     stable.
     """
-    return tuple(
-        ToolSpec(
-            name=definition.name,
-            description=definition.description,
-            parameters=definition.input_schema,
-        )
-        for definition in STATIC_CAPABILITIES.values()
+    return tuple(_spec(definition) for definition in STATIC_CAPABILITIES.values())
+
+
+def _spec(definition) -> ToolSpec:
+    """A collected capability hides `limit` (KTD10): the walk picks page sizes,
+    so prompt cost no longer depends on one the model chose."""
+    parameters = definition.input_schema
+    if definition.name not in COLLECTED_CAPABILITIES:
+        return ToolSpec(name=definition.name, description=definition.description, parameters=parameters)
+    cap = COLLECTED_CAPABILITIES[definition.name][1]
+    parameters = {
+        **parameters,
+        "properties": {name: value for name, value in parameters["properties"].items() if name != "limit"},
+        "required": [name for name in parameters.get("required", []) if name != "limit"],
+    }
+    return ToolSpec(
+        name=definition.name,
+        description=f"{definition.description} Returns the whole list in one call, up to {cap} items; "
+        "offset starts it later.",
+        parameters=parameters,
     )
 
 
@@ -148,9 +167,57 @@ def build_executor(client: StaticMCPClient, artifact_id: str):
     def execute(capability: str, arguments: dict):
         parameters = {**arguments}
         parameters.pop("artifact_id", None)
+        if capability in COLLECTED_CAPABILITIES:
+            return _collect(client, capability, artifact_id, parameters)
         return client.invoke(capability, artifact_id=artifact_id, **parameters)
 
     return execute
+
+
+async def _collect(client: StaticMCPClient, capability: str, artifact_id: str, parameters: dict) -> dict:
+    """Walk a paged capability from the model's offset until its list ends or
+    the cap is reached, and return one envelope holding every item (KTD1).
+
+    The merged metadata states coverage (KTD2): `total`, `fetched` and
+    `unfetched` items, `pages` walked, and `next_offset` when items remain.
+    A failure after the first page keeps what was fetched and names itself in
+    `fetch_error` (R3); a first-page failure is the capability's own.
+    """
+    key, cap = COLLECTED_CAPABILITIES[capability]
+    parameters.pop("limit", None)
+    start = parameters.pop("offset", 0)
+    first = await client.invoke(capability, artifact_id=artifact_id, **parameters, offset=start, limit=min(PAGE_SIZE, cap))
+    if first.get("status") != "ok":
+        return first
+    items = list(first["data"][key])
+    has_more = first["metadata"]["has_more"]
+    pages, fetch_error = 1, None
+    while has_more and len(items) < cap:
+        pages += 1
+        try:
+            page = await client.invoke(
+                capability, artifact_id=artifact_id, **parameters,
+                offset=start + len(items), limit=min(PAGE_SIZE, cap - len(items)),
+            )
+        except Exception as error:  # keep the pages already fetched
+            fetch_error = f"{type(error).__name__}: {error}"
+            break
+        if page.get("status") != "ok":
+            error = page.get("error") or {}
+            fetch_error = f"{error.get('code') or page.get('status')}: {error.get('message') or page.get('status')}"
+            break
+        items.extend(page["data"][key])
+        has_more = page["metadata"]["has_more"]
+
+    total = first["metadata"]["total"]
+    metadata = {key: value for key, value in first["metadata"].items() if key != "limit"}
+    metadata.update(offset=start, has_more=start + len(items) < total, total=total,
+                    fetched=len(items), unfetched=total - len(items), pages=pages)
+    if metadata["has_more"]:
+        metadata["next_offset"] = start + len(items)
+    if fetch_error:
+        metadata["fetch_error"] = fetch_error
+    return {**first, "data": {**first["data"], key: items}, "metadata": metadata}
 
 
 def build_evidence_executor(

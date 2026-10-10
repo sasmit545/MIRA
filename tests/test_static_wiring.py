@@ -153,3 +153,123 @@ class EvidenceExecutorTests(unittest.IsolatedAsyncioTestCase):
         evidence = await self.run_once(state)
         self.assertEqual([item.id for item in state.evidence], ["E1", "E2"])
         self.assertEqual(evidence[0].id, "E2")
+
+
+# --- A collected capability returns its whole list as one observation (KTD1)
+
+import pytest
+
+from mira.agents.static.wiring import COLLECTED_CAPABILITIES, build_executor
+from mira.capabilities.static.common import paginate
+from mira.contracts.capabilities.static.list_imports import ListImportsOutput
+
+IMPORT_CAP = COLLECTED_CAPABILITIES["list_imports"][1]
+
+
+class PagedImports:
+    """Serves list_imports pages the way the server does, recording each call."""
+
+    def __init__(self, count, fail_from=None, raise_from=None):
+        self.imports = [
+            {"dll": "KERNEL32.dll", "name": f"Fn{index}", "ordinal": None, "address": 0x1000 + index}
+            for index in range(count)
+        ]
+        self.calls = []
+        self.fail_from = fail_from
+        self.raise_from = raise_from
+
+    async def invoke(self, capability, artifact_id, **parameters):
+        self.calls.append({"artifact_id": artifact_id, **parameters})
+        offset = parameters.get("offset", 0)
+        if self.raise_from is not None and offset >= self.raise_from:
+            raise RuntimeError("worker crashed")
+        if self.fail_from is not None and offset >= self.fail_from:
+            return {
+                "status": "error", "data": None,
+                "error": {"code": "RESOURCE_LIMIT", "message": "analysis timed out"},
+                "metadata": {"artifact_id": artifact_id, "capability": capability},
+            }
+        selected, page = paginate(self.imports, parameters.get("limit", 100), offset)
+        return {
+            "status": "ok", "data": {"imports": selected},
+            "metadata": {"artifact_id": artifact_id, "capability": capability, "tool_version": "0.1.0", **page},
+        }
+
+
+async def collect(client, **arguments):
+    return await build_executor(client, "sample")("list_imports", arguments)
+
+
+async def test_one_call_collects_every_page():
+    client = PagedImports(2345)
+
+    result = await collect(client)
+
+    assert len(result["data"]["imports"]) == 2345
+    metadata = result["metadata"]
+    assert (metadata["total"], metadata["fetched"], metadata["unfetched"], metadata["pages"]) == (2345, 2345, 0, 3)
+    assert metadata["has_more"] is False and "next_offset" not in metadata and "fetch_error" not in metadata
+    assert [call["offset"] for call in client.calls] == [0, 1000, 2000]
+    ListImportsOutput.model_validate(result["data"])
+
+
+async def test_a_list_over_the_cap_stops_at_the_cap_and_says_where_the_rest_starts():
+    client = PagedImports(IMPORT_CAP + 250)
+
+    result = await collect(client)
+
+    metadata = result["metadata"]
+    assert len(result["data"]["imports"]) == IMPORT_CAP
+    assert (metadata["fetched"], metadata["unfetched"], metadata["next_offset"]) == (IMPORT_CAP, 250, IMPORT_CAP)
+    assert metadata["has_more"] is True
+    assert sum(call["limit"] for call in client.calls) == IMPORT_CAP
+
+
+async def test_the_model_offset_starts_the_walk():
+    client = PagedImports(2345)
+
+    result = await collect(client, offset=500)
+
+    metadata = result["metadata"]
+    assert result["data"]["imports"][0]["name"] == "Fn500"
+    assert (metadata["offset"], metadata["fetched"], metadata["unfetched"]) == (500, 1845, 500)
+    assert client.calls[0]["offset"] == 500
+
+
+@pytest.mark.parametrize("client, failure", [
+    (PagedImports(2345, fail_from=1000), "RESOURCE_LIMIT: analysis timed out"),
+    (PagedImports(2345, raise_from=1000), "worker crashed"),
+])
+async def test_a_later_page_failure_keeps_the_pages_already_fetched(client, failure):
+    result = await collect(client)
+
+    metadata = result["metadata"]
+    assert result["status"] == "ok"
+    assert len(result["data"]["imports"]) == 1000
+    assert failure in metadata["fetch_error"]
+    assert (metadata["unfetched"], metadata["next_offset"]) == (1345, 1000)
+
+
+async def test_a_first_page_failure_is_the_capability_failure_unchanged():
+    client = PagedImports(10, fail_from=0)
+
+    result = await collect(client)
+
+    assert result == await client.invoke("list_imports", "sample", offset=0)
+
+
+async def test_a_model_supplied_artifact_id_and_limit_are_ignored():
+    client = PagedImports(5)
+
+    await collect(client, artifact_id="other-sample", limit=2)
+
+    assert client.calls[0]["artifact_id"] == "sample"
+    assert client.calls[0]["limit"] == 1000
+
+
+async def test_an_uncollected_capability_is_passed_through():
+    client = PagedImports(5)
+
+    await build_executor(client, "sample")("list_exports", {"limit": 2})
+
+    assert client.calls == [{"artifact_id": "sample", "limit": 2}]
