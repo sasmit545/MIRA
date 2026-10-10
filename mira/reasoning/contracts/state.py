@@ -1,10 +1,11 @@
 """Investigation state."""
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import List, Optional, Dict, Any
 from ..contracts.objective import Objective
 from ..contracts.tool import ToolCall, ToolResult
 from ..contracts.finding import Finding
+from ..contracts.memory import WorkingMemory
 
 
 @dataclass
@@ -23,7 +24,7 @@ class State:
     findings: List[Finding] = field(default_factory=list)
     evidence: List[Any] = field(default_factory=list)  # Curated subset of observations
     observations: List[Dict[str, Any]] = field(default_factory=list)  # Each observation: {'call': ToolCall, 'result': ToolResult}
-    scratch: Dict[str, Any] = field(default_factory=dict)  # visible to model, excluded from output
+    working_memory: WorkingMemory = field(default_factory=WorkingMemory)
 
     def record_usage(self, usage: Optional[Dict[str, int]]) -> None:
         if usage is None:
@@ -60,7 +61,7 @@ class State:
             'findings_count': len(self.findings),
             'evidence_count': len(self.evidence),
             'observations_count': len(self.observations),
-            'scratch': self.scratch.copy(),
+            'working_memory': asdict(self.working_memory),
             'run_id': self.run_id,
             'total_tokens': self.total_tokens,
         }

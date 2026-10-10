@@ -2,6 +2,7 @@
 
 from mira.reasoning.contracts.objective import Objective
 from mira.reasoning.contracts.state import State
+from mira.reasoning.contracts.memory import WorkingMemory
 from mira.reasoning.contracts.finding import Confidence, Finding, Severity
 from mira.reasoning.contracts.tool import ToolCall, ToolResult
 
@@ -15,7 +16,8 @@ def test_state_initialization():
     assert state.findings == []
     assert state.evidence == []
     assert state.observations == []
-    assert state.scratch == {}
+    assert state.working_memory == WorkingMemory()
+    assert state.working_memory.hypotheses == []
     assert state.run_id == "sample_test_objective"
 
 
@@ -56,5 +58,6 @@ def test_snapshot():
     assert snap['findings_count'] == 0
     assert snap['evidence_count'] == 0
     assert snap['observations_count'] == 0
-    assert snap['scratch'] == {}
+    assert 'scratch' not in snap
+    assert snap['working_memory']['hypotheses'] == []
     assert snap['run_id'] == state.run_id
