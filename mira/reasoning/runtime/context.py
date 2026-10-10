@@ -35,6 +35,8 @@ def render_state(state: State) -> str:
         f"Turn: {state.turn_count}",
         f"Tool calls so far: {state.tool_call_count}",
         "",
+        *render_memory(state),
+        "",
         "Capability history (handle, call, outcome):",
     ]
     if not state.observations:
@@ -84,3 +86,36 @@ def render_state(state: State) -> str:
         for finding in state.findings:
             lines.append(f"  - {finding.title}: {finding.description}")
     return "\n".join(lines)
+
+
+def render_memory(state: State) -> list:
+    """The model's own notes, as it last recorded them. Never filled in by the
+    harness: an empty notebook says so rather than implying conclusions."""
+    memory = state.working_memory
+    lines = ["Your working notes (from record_memory):"]
+    if not (memory.understanding or memory.hypotheses or memory.open_questions or memory.candidates):
+        lines.append("  (none recorded yet)")
+        return lines
+
+    lines.append(f"  Understanding: {memory.understanding or '(none stated)'}")
+    if memory.hypotheses:
+        lines.append("  Hypotheses:")
+        for hypothesis in memory.hypotheses:
+            lines.append(
+                f"    {hypothesis.id} [{hypothesis.status}, confidence {hypothesis.confidence:.2f}] {hypothesis.statement}"
+            )
+            if hypothesis.supporting_evidence:
+                lines.append(f"      supported by: {', '.join(hypothesis.supporting_evidence)}")
+            if hypothesis.contradicting_evidence:
+                lines.append(f"      weakened by: {', '.join(hypothesis.contradicting_evidence)}")
+            if hypothesis.unknowns:
+                lines.append(f"      unknowns: {hypothesis.unknowns}")
+    if memory.open_questions:
+        lines.append("  Open questions:")
+        lines.extend(f"    {question.id} {question.question}" for question in memory.open_questions)
+    if memory.candidates:
+        lines.append("  Candidate next investigations:")
+        for candidate in memory.candidates:
+            reason = f" ({candidate.reason})" if candidate.reason else ""
+            lines.append(f"    {candidate.id} {candidate.investigation}{reason}")
+    return lines

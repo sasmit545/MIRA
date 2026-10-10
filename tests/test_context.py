@@ -158,3 +158,67 @@ def test_a_run_with_no_evidence_says_nothing_about_it():
     assert "cite these identifiers" not in ContextBuilder.build(
         build_state(), build_definition()
     )
+
+
+# --- Working memory in the prompt (U6)
+
+from mira.reasoning.contracts.memory import Candidate, MemoryHypothesis, OpenQuestion
+
+
+def test_an_empty_notebook_claims_nothing():
+    context = ContextBuilder.build(build_state(), build_definition())
+
+    assert "Your working notes" in context
+    assert "(none recorded yet)" in context
+    assert "Hypotheses:" not in context
+
+
+def test_the_notes_are_rendered_with_evidence_and_disposition():
+    state = build_state()
+    memory = state.working_memory
+    memory.understanding = "Likely a packed dropper."
+    memory.hypotheses.append(
+        MemoryHypothesis(
+            id="H1",
+            statement="The sample is packed.",
+            confidence=0.8,
+            supporting_evidence=["E1"],
+            contradicting_evidence=["E2"],
+            unknowns="Whether it unpacks at runtime.",
+        )
+    )
+    memory.open_questions.append(OpenQuestion(id="Q1", question="What does it download?"))
+    memory.candidates.append(Candidate(id="C1", investigation="Search strings for URLs"))
+
+    context = ContextBuilder.build(state, build_definition())
+
+    assert "Understanding: Likely a packed dropper." in context
+    assert "H1 [open, confidence 0.80] The sample is packed." in context
+    assert "supported by: E1" in context and "weakened by: E2" in context
+    assert "unknowns: Whether it unpacks at runtime." in context
+    assert "Q1 What does it download?" in context
+    assert "C1 Search strings for URLs" in context
+
+
+def test_the_instructions_state_the_notes_obligations():
+    context = ContextBuilder.build(build_state(), build_definition())
+
+    assert "record_memory in the same response as every capability call" in context
+    assert "Notes are additive" in context and "close" in context
+    assert "questions you could not close" in context
+
+
+def test_a_huge_successful_result_barely_grows_the_prompt():
+    """U6 verification: a 10,000-character result leaves the prompt within a
+    few hundred characters of its prior size, with its handle and digest."""
+    state = build_state()
+    before = len(ContextBuilder.build(state, build_definition()))
+    state.record_tool_call(ToolCall(tool_call_id="1", name="file_info", arguments={}))
+    state.record_tool_result(ToolResult(tool_call_id="1", success=True, output="A" * 10_000))
+
+    context = ContextBuilder.build(state, build_definition())
+
+    assert len(context) - before < 400
+    assert "[test_run#file_info#0]" in context
+    assert "partial digest" in context
+    assert "A" * 100 not in context
