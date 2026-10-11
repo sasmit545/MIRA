@@ -189,6 +189,8 @@ async def _collect(client: StaticMCPClient, capability: str, artifact_id: str, p
     first = await client.invoke(capability, artifact_id=artifact_id, **parameters, offset=start, limit=min(PAGE_SIZE, cap))
     if first.get("status") != "ok":
         return first
+    # Walk on from the offset the server validated: the model may send "500".
+    start = first["metadata"].get("offset", start)
     items = list(first["data"][key])
     has_more = first["metadata"]["has_more"]
     pages, fetch_error = 1, None
@@ -206,6 +208,8 @@ async def _collect(client: StaticMCPClient, capability: str, artifact_id: str, p
             error = page.get("error") or {}
             fetch_error = f"{error.get('code') or page.get('status')}: {error.get('message') or page.get('status')}"
             break
+        if not page["data"][key]:
+            break  # a page that adds nothing would walk the same offset forever
         items.extend(page["data"][key])
         has_more = page["metadata"]["has_more"]
 

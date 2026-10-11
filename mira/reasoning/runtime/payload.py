@@ -92,7 +92,9 @@ def _rest(metadata: Dict[str, Any]) -> str:
     if "next_offset" not in metadata:
         return ""
     call = metadata.get("capability") or "the same capability"
-    return f", fetch the rest with {call}(offset={metadata['next_offset']})"
+    # Counted from next_offset: `unfetched` also holds anything before offset.
+    past = metadata["total"] - metadata["next_offset"]
+    return f", the {past} past it with {call}(offset={metadata['next_offset']})"
 
 
 def list_arrays(value: Any, prefix: str = "") -> List[Tuple[str, int]]:
@@ -118,6 +120,7 @@ class Selection(NamedTuple):
     failure: str
     path: str = ""  # the array the shown indices belong to
     shown: Tuple[int, ...] = ()  # indices of the items the answer showed
+    fields: Optional[Tuple[str, ...]] = None  # the keys shown of each item; None for whole items
 
 
 def select(output: Any, arguments: Dict[str, Any]) -> Selection:
@@ -236,7 +239,7 @@ def select(output: Any, arguments: Dict[str, Any]) -> Selection:
             header += f"; showing the first {len(picked)}, continue with offset={shown_to}"
         elif not criteria and shown_to < len(target):
             header += f"; more remain, continue with offset={shown_to}"
-    return Selection("\n".join([header, *lines]), "", path or "", tuple(shown))
+    return Selection("\n".join([header, *lines]), "", path or "", tuple(shown), tuple(fields) if fields else None)
 
 
 def recall_fingerprint(arguments: Dict[str, Any]) -> str:

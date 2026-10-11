@@ -95,31 +95,35 @@ class CapabilityRecord:
     digest: str  # empty for a failure: the error is what it produced
     evidence: Tuple[str, ...] = ()  # ids minted from this call: what the specialist read out of it
     shown: Tuple[str, ...] = ()  # per array, the items recalls have shown (R10)
-    covered: Optional[Tuple[int, int]] = None  # the item range [start, end) a collected call fetched (KTD2)
+
+
+def capability_calls(state: State) -> Iterator[Tuple[str, ToolCall, ToolResult]]:
+    """Every capability call this run made, in order, with its handle and
+    nothing rendered: for questions about the calls rather than the prompt."""
+    for name, occurrence, call, result in _numbered(_live_pairs(state)):
+        yield trace_provenance(state.run_id, name, occurrence), call, result
 
 
 def capability_history(state: State) -> List[CapabilityRecord]:
-    """Every capability call this run made, in order, each with its handle."""
+    """Every capability call this run made, in order, as the prompt shows it."""
     minted: Dict[str, List[str]] = {}
     for item in state.evidence:
         provenance = getattr(item, "provenance", None)
         if provenance:
             minted.setdefault(provenance, []).append(item.id)
-    records = []
-    for name, occurrence, call, result in _numbered(_live_pairs(state)):
-        handle = trace_provenance(state.run_id, name, occurrence)
-        records.append(CapabilityRecord(
+    return [
+        CapabilityRecord(
             handle=handle,
-            name=name,
+            name=call.name,
             arguments=dict(call.arguments),
             success=result.success,
             error=result.error,
             digest=digest(result.output) if result.success else "",
             evidence=tuple(minted.get(handle, ())),
             shown=_shown(state.shown_items.get(handle) or {}, result.output),
-            covered=_covered(result),
-        ))
-    return records
+        )
+        for handle, call, result in capability_calls(state)
+    ]
 
 
 def _shown(paths: Dict[str, set], output: Any) -> Tuple[str, ...]:
@@ -142,7 +146,8 @@ def _ranges(indices: List[int]) -> str:
     return ", ".join(f"{start}..{end}" if end > start else str(start) for start, end in spans)
 
 
-def _covered(result: ToolResult) -> Optional[Tuple[int, int]]:
+def covered_range(result: ToolResult) -> Optional[Tuple[int, int]]:
+    """The item range [start, end) a collected call fetched (KTD2), if any."""
     metadata = result.output.get("metadata") if result.success and isinstance(result.output, dict) else None
     if not isinstance(metadata, dict) or not isinstance(metadata.get("fetched"), int):
         return None

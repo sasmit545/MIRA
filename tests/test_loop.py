@@ -753,7 +753,7 @@ def test_a_recall_of_items_already_shown_is_served_but_is_not_progress():
     assert first_new and "[9] " in first
     assert not again_new and "[5] " in again
     assert later_new
-    assert state.shown_items["test#list_imports#0"]["data.imports"] == set(range(10)) | set(range(400, 412))
+    assert set(state.shown_items["test#list_imports#0"]["data.imports"]) == set(range(10)) | set(range(400, 412))
 
 
 async def test_a_refused_repeat_recall_owes_no_notes(tmp_path):
@@ -837,3 +837,39 @@ async def test_a_failed_call_is_retried_with_the_same_arguments(tmp_path):
     result = await loop.run(Objective(description="o"), build_definition(tools=[IMPORTS_SPEC]))
 
     assert outcomes == [] and result.metadata["tool_calls"] == 2
+
+
+# --- Review follow-ups: failed recalls, projected recalls -------------------
+
+
+def imports_state():
+    state = State(objective=Objective(description="o"), run_id="test")
+    state.record_tool_call(imports_call("1"))
+    state.record_tool_result(ToolResult("1", success=True, output=collected()))
+    return state
+
+
+def test_a_failed_recall_is_not_remembered_as_answered():
+    state = State(objective=Objective(description="o"), run_id="test")
+    asked = recall_imports(limit=5).arguments
+
+    before, _ = _recall(state, asked)  # the handle does not exist yet
+    state.record_tool_call(imports_call("1"))
+    state.record_tool_result(ToolResult("1", success=True, output=collected()))
+    after, new = _recall(state, asked)
+
+    assert "failed" in before
+    assert new and "[4] " in after and "already answered" not in after
+    assert state.repeat_recalls == 0
+
+
+def test_new_keys_of_items_already_shown_are_new():
+    state = imports_state()
+
+    _, names_new = _recall(state, recall_imports(limit=5, fields=["name"]).arguments)
+    _, dlls_new = _recall(state, recall_imports(limit=5, fields=["dll"]).arguments)
+    _, whole_new = _recall(state, recall_imports(limit=5).arguments)
+    _, again_new = _recall(state, recall_imports(limit=5, fields=["dll", "name"]).arguments)
+
+    assert names_new and dlls_new and whole_new
+    assert not again_new  # whole items already showed every key

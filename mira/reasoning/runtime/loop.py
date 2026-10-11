@@ -3,7 +3,7 @@
 import copy
 import dataclasses
 import json
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, FrozenSet, List, Optional, Tuple
 
 from ..contracts.finding import Confidence, Evidence, Finding, Severity
 from ..contracts.model import ModelResponse
@@ -18,7 +18,7 @@ from .context import ContextBuilder
 from .narrative import apply_narrative
 from .payload import recall_fingerprint, select
 from .tool_runtime import ToolRuntime
-from .trace import Tracer, capability_history, live_observation
+from .trace import Tracer, capability_calls, covered_range, live_observation
 
 REPORT_TOOL_CALL_ID = "submit_report"
 MEMORY_TOOL_CALL_ID = "record_memory"
@@ -111,7 +111,7 @@ class AgentLoop:
             # Notes reflect results through the previous turn (R7). Before any
             # capability has returned there is nothing to note, so the very
             # first capability turn owes none; notes it does send still merge.
-            notes_owed = bool(capability_history(state))
+            notes_owed = next(capability_calls(state), None) is not None
             calls: list[ToolCall] = []
             results: list[ToolResult] = []
             recalls = 0
@@ -321,8 +321,8 @@ class AgentLoop:
                 state.working_memory, update, {item.id for item in state.evidence}
             )
             if warnings and not failure:
-                # Merged, so not a rejection; said once so the model does not
-                # believe a dropped citation stands.
+                # Merged, so not a rejection; stated in the history so the
+                # model does not believe a dropped citation stands.
                 state.record_harness_observation(
                     ToolCall(tool_call_id=MEMORY_TOOL_CALL_ID, name=MEMORY_TOOL_CALL_ID, arguments={}),
                     ToolResult(
@@ -461,20 +461,21 @@ def _prior_success(state: State, call: ToolCall, spec: Optional[ToolSpec]) -> Op
     properties = (spec.parameters.get("properties") if spec else None) or {}
     defaults = {name: schema["default"] for name, schema in properties.items() if isinstance(schema, dict) and "default" in schema}
     asked = {**defaults, **call.arguments}
-    for record in capability_history(state):
-        if not record.success or record.name != call.name:
+    for handle, earlier_call, result in capability_calls(state):
+        if not result.success or earlier_call.name != call.name:
             continue
-        earlier = {**defaults, **record.arguments}
+        earlier = {**defaults, **earlier_call.arguments}
         if earlier == asked:
-            return f"Not rerun: identical to {record.handle}; use that result, or recall_observation for more of it."
-        if record.covered is None or not isinstance(asked.get("offset"), int):
+            return f"Not rerun: identical to {handle}; use that result, or recall_observation for more of it."
+        covered = covered_range(result)
+        if covered is None or not isinstance(asked.get("offset"), int):
             continue
-        start, end = record.covered
+        start, end = covered
         same_otherwise = {k: v for k, v in earlier.items() if k != "offset"} == {k: v for k, v in asked.items() if k != "offset"}
         if same_otherwise and start <= asked["offset"] < end:
             return (
-                f"Not rerun: {record.handle} already holds items {start}..{end - 1} of this list; read them with "
-                f"recall_observation(handle={record.handle!r}, offset={asked['offset'] - start})."
+                f"Not rerun: {handle} already holds items {start}..{end - 1} of this list; read them with "
+                f"recall_observation(handle={handle!r}, offset={asked['offset'] - start})."
             )
     return None
 
@@ -490,7 +491,6 @@ def _recall(state: State, arguments: dict) -> Tuple[str, bool]:
             f"recall_observation({asked}): already answered on turn {state.recall_fingerprints[fingerprint]}; "
             "not repeated. What it showed belongs in your notes; ask for something else."
         ), False
-    state.recall_fingerprints[fingerprint] = state.turn_count + 1
     handle = arguments.get("handle")
     if not isinstance(handle, str) or not handle:
         return f"recall_observation({asked}) failed: handle is required, copied from the capability history.", False
@@ -506,14 +506,26 @@ def _recall(state: State, arguments: dict) -> Tuple[str, bool]:
     selection = select(result.output, arguments)
     if selection.failure:
         return f"recall_observation({asked}) failed: {selection.failure}", False
+    # Only an answer is remembered: a failure may stop applying, so its retry runs.
+    state.recall_fingerprints[fingerprint] = state.turn_count + 1
     # The ledger (KTD7) records what was shown, apart from evidence: showing
     # an item makes it citable no more than before.
-    shown = set(selection.shown)
-    # An aggregate or a value is new by its new question; a listing only by new items.
-    new = not shown or not shown <= state.shown_items.get(handle, {}).get(selection.path, set())
-    if shown:
-        state.shown_items.setdefault(handle, {}).setdefault(selection.path, set()).update(shown)
+    view = None if selection.fields is None else frozenset(selection.fields)
+    seen = state.shown_items.get(handle, {}).get(selection.path, {})
+    # An aggregate or a value is new by its new question; a listing by items,
+    # or keys of items, not shown before.
+    new = not selection.shown or not all(_covers(seen.get(index, frozenset()), view) for index in selection.shown)
+    if selection.shown:
+        ledger = state.shown_items.setdefault(handle, {}).setdefault(selection.path, {})
+        for index in selection.shown:
+            had = ledger.get(index, frozenset())
+            ledger[index] = None if had is None or view is None else had | view
     return f"recall_observation({asked}):\n{selection.text}", new
+
+
+def _covers(had: Optional[FrozenSet[str]], view: Optional[FrozenSet[str]]) -> bool:
+    """Whether the keys already shown of an item (None: all) include those asked."""
+    return had is None or (view is not None and view <= had)
 
 
 # --- Report validation.

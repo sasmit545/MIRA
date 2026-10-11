@@ -1,7 +1,7 @@
 """Investigation state."""
 
 from dataclasses import asdict, dataclass, field
-from typing import List, Optional, Dict, Any, Set
+from typing import List, Optional, Dict, Any, FrozenSet
 from ..contracts.objective import Objective
 from ..contracts.tool import ToolCall, ToolResult
 from ..contracts.finding import Finding
@@ -34,11 +34,11 @@ class State:
     repeat_recalls: int = 0
     reruns_refused: int = 0
     findings_discarded: int = 0
-    # The retrieval ledger (KTD7), kept apart from evidence: each recall's
-    # normalized query mapped to the turn that first asked it, and per handle
-    # and array path, the item indices recalls have shown.
+    # The retrieval ledger (KTD7), kept apart from evidence: each answered
+    # recall's normalized query mapped to the turn that asked it, and per handle
+    # and array path, each item index shown with the keys shown (None: all).
     recall_fingerprints: Dict[str, int] = field(default_factory=dict)
-    shown_items: Dict[str, Dict[str, Set[int]]] = field(default_factory=dict)
+    shown_items: Dict[str, Dict[str, Dict[int, Optional[FrozenSet[str]]]]] = field(default_factory=dict)
 
     def record_usage(self, usage: Optional[Dict[str, int]]) -> None:
         """Called once per model response, so it also counts the call: a

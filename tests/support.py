@@ -87,7 +87,7 @@ class PagedImports:
 
     async def invoke(self, capability, artifact_id, **parameters):
         self.calls.append({"artifact_id": artifact_id, **parameters})
-        offset = parameters.get("offset", 0)
+        offset = int(parameters.get("offset", 0))  # the server's contract coerces "500" to 500
         if self.raise_from is not None and offset >= self.raise_from:
             raise RuntimeError("worker crashed")
         if self.fail_from is not None and offset >= self.fail_from:
@@ -96,7 +96,7 @@ class PagedImports:
                 "error": {"code": "RESOURCE_LIMIT", "message": "analysis timed out"},
                 "metadata": {"artifact_id": artifact_id, "capability": capability},
             }
-        selected, page = paginate(self.imports, parameters.get("limit", 100), offset)
+        selected, page = paginate(self.imports, int(parameters.get("limit", 100)), offset)
         return {
             "status": "ok", "data": {"imports": selected},
             "metadata": {"artifact_id": artifact_id, "capability": capability, "tool_version": "0.1.0", **page},

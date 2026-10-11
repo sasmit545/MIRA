@@ -244,3 +244,41 @@ async def test_an_uncollected_capability_is_passed_through():
     await build_executor(client, "sample")("list_exports", {"limit": 2})
 
     assert client.calls == [{"artifact_id": "sample", "limit": 2}]
+
+
+async def test_an_offset_sent_as_text_is_walked_from_the_validated_offset():
+    client = PagedImports(2345)
+
+    result = await collect(client, offset="500")
+
+    assert result["metadata"]["offset"] == 500
+    assert result["metadata"]["fetched"] == 1845
+
+
+class StalledImports(PagedImports):
+    """Claims more remain but returns nothing past the first page."""
+
+    async def invoke(self, capability, artifact_id, **parameters):
+        page = await super().invoke(capability, artifact_id, **parameters)
+        if parameters.get("offset", 0) >= 1000:
+            page = {**page, "data": {"imports": []}, "metadata": {**page["metadata"], "has_more": True}}
+        return page
+
+
+async def test_a_page_that_adds_nothing_ends_the_walk():
+    client = StalledImports(2345)
+
+    result = await collect(client)
+
+    assert result["metadata"]["fetched"] == 1000
+    assert len(client.calls) == 2
+
+
+async def test_the_rest_past_a_late_offset_is_counted_from_where_it_starts():
+    from mira.reasoning.runtime.payload import digest
+
+    result = await collect(PagedImports(25_000), offset=10_000)
+
+    text = digest(result)
+    assert "15000 not fetched" in text  # everything this call does not hold
+    assert "the 5000 past it with list_imports(offset=20000)" in text
