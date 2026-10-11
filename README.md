@@ -111,7 +111,7 @@ The **static-analysis vertical slice** runs end to end: an LLM-driven agent inve
 
 ```bash
 python -m mira.reasoning.main sample.exe \
-    --objective "Identify suspicious behavior" \
+    --objective "Determine whether this file is malicious, benign, or undetermined from static evidence." \
     --max-turns 5 --max-tool-calls 5 --trace-dir runs
     # --quiet to suppress the live per-turn output
 ```

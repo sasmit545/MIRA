@@ -1,6 +1,7 @@
 """The benchmark harness: one row per run, and a comparison that keeps
 efficiency and detection apart (R19, R20)."""
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -66,6 +67,106 @@ async def test_a_missing_sample_is_a_failed_row_and_the_rest_still_run(tmp_path)
 
     assert [row["ok"] for row in rows] == [False, True]
     assert "not found" in rows[0]["error"]
+
+
+FULL_HEADER = "path,label,sha256,label_source,labeled_on,split,source,family,packed"
+
+
+def write_sample(tmp_path, name="tiny.exe"):
+    path = tmp_path / name
+    path.write_bytes(build_minimal_pe())
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+async def run(tmp_path, *rows, split=None, header=FULL_HEADER):
+    path = tmp_path / "samples.csv"
+    path.write_text("\n".join([header, *rows]) + "\n")
+    return await benchmark.run_manifest(
+        path, 1, "objective", tmp_path / "traces", tmp_path / "rows.jsonl",
+        model_factory=ImportsThenReport, split=split,
+    )
+
+
+async def test_a_labeled_manifest_carries_its_sample_fields_into_each_row(tmp_path):
+    digest = write_sample(tmp_path)
+
+    (row,) = await run(tmp_path, f"tiny.exe,benign,{digest.upper()},vendor,2026-10-11,dev,system32,,no")
+
+    assert row["ok"]
+    assert row["sha256"] == digest
+    assert (row["split"], row["source"], row["family"], row["packed"]) == ("dev", "system32", "", "no")
+    assert (row["label_source"], row["labeled_on"]) == ("vendor", "2026-10-11")
+
+
+async def test_a_legacy_manifest_still_runs_and_records_the_computed_hash(tmp_path):
+    digest = write_sample(tmp_path)
+
+    (row,) = await run(tmp_path, "tiny.exe,benign", header="# path,label")
+
+    assert row["ok"] and row["label"] == "benign"
+    assert row["sha256"] == digest
+    assert row["split"] == row["source"] == row["family"] == row["label_source"] == ""
+
+
+async def test_a_sample_whose_bytes_changed_is_a_failed_row_and_the_rest_still_run(tmp_path):
+    digest = write_sample(tmp_path)
+    write_sample(tmp_path, "other.exe")
+
+    rows = await run(tmp_path, f"tiny.exe,benign,{'0' * 64}", f"other.exe,benign,{digest}")
+
+    assert [row["ok"] for row in rows] == [False, True]
+    assert "hash mismatch" in rows[0]["error"]
+    assert rows[0]["sha256"] == digest  # the file's own hash, not the recorded one
+
+
+async def test_a_split_filter_runs_only_that_split(tmp_path):
+    write_sample(tmp_path)
+    write_sample(tmp_path, "other.exe")
+
+    rows = await run(tmp_path, "tiny.exe,benign,,,,dev", "other.exe,benign,,,,test", split="dev")
+
+    assert [Path(row["sample"]).name for row in rows] == ["tiny.exe"]
+
+
+def test_the_cli_and_the_benchmark_default_to_one_neutral_objective(tmp_path, monkeypatch):
+    """test_web.py checks the web form and the dashboard against the same constant."""
+    import sys
+
+    import pytest
+
+    from mira.reasoning import main as cli
+
+    seen = []
+
+    async def record(sample, objective, *args, **kwargs):
+        seen.append(objective)
+        raise RuntimeError("stop after the objective is known")
+
+    monkeypatch.setattr(cli, "investigate", record)
+    monkeypatch.setattr(sys, "argv", ["mira", str(tmp_path / "sample.exe")])
+    with pytest.raises(RuntimeError, match="objective is known"):
+        cli.main()
+
+    async def record_manifest(manifest, runs, objective, *args, **kwargs):
+        seen.append(objective)
+
+    monkeypatch.setattr(benchmark, "run_manifest", record_manifest)
+    monkeypatch.setattr(sys, "argv", ["benchmark", "run", "samples.csv"])
+    benchmark.main()
+
+    assert seen == [cli.DEFAULT_OBJECTIVE] * 2
+    assert "suspicious" not in cli.DEFAULT_OBJECTIVE.lower()
+
+
+async def test_every_row_records_where_and_how_it_ran(tmp_path):
+    write_sample(tmp_path)
+
+    rows = await run(tmp_path, "tiny.exe,benign", "missing.exe,malicious")
+
+    for row in rows:
+        assert row["revision"] and isinstance(row["dirty"], (bool, type(None)))
+        assert row["model"] == "scripted" and row["endpoint_host"] == ""
+        assert row["objective"] == "objective"
 
 
 def row(sample, verdict, calls, label="malicious"):

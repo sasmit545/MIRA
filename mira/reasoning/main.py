@@ -33,6 +33,10 @@ from .contracts.output import FinalOutput
 from .definition.agent import AgentDefinition
 from .runtime.tool_runtime import ToolRuntime
 
+# Asks for a verdict without presuming suspicion (R7). The web console and the
+# benchmark import it; dashboard.html and README.md carry the same text.
+DEFAULT_OBJECTIVE = "Determine whether this file is malicious, benign, or undetermined from static evidence."
+
 
 async def investigate(
     sample_path: Path,
@@ -109,7 +113,7 @@ def main() -> None:
     load_env()
     parser = argparse.ArgumentParser(description="Investigate a sample with the static agent.")
     parser.add_argument("sample", type=Path, help="path to the sample to investigate")
-    parser.add_argument("--objective", default="Identify suspicious behavior")
+    parser.add_argument("--objective", default=DEFAULT_OBJECTIVE)
     parser.add_argument("--trace-dir", type=Path, default=Path("runs"))
     parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
     parser.add_argument("--max-tool-calls", type=int, default=DEFAULT_MAX_TOOL_CALLS)
