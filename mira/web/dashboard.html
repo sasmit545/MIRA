@@ -1,65 +1,1976 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>MIRA · Investigation Console</title>
-    <style>
-      :root { color-scheme: dark; --bg:#09111f; --panel:#111c2f; --line:#243451; --text:#edf3ff; --muted:#9eafca; --accent:#7c93ff; --warn:#f9b951; --bad:#ff7385; --good:#45d69b; }
-      * { box-sizing: border-box; } body { margin:0; background:var(--bg); color:var(--text); font:15px system-ui, sans-serif; }
-      header { padding:24px max(24px, calc((100vw - 1280px)/2)); border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
-      h1,h2,h3,p { margin-top:0; } h1 { letter-spacing:.08em; font-size:20px; } .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.1em; }
-      main { max-width:1280px; margin:0 auto; padding:24px; display:grid; gap:20px; grid-template-columns:340px 1fr; }
-      .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px; } form { display:grid; gap:12px; } label { display:grid; gap:6px; color:var(--muted); font-size:13px; }
-      input, textarea, button { font:inherit; } input,textarea { border:1px solid var(--line); background:#0c1628; color:var(--text); padding:10px; border-radius:7px; } textarea { min-height:80px; resize:vertical; }
-      button { background:var(--accent); color:#081126; border:0; padding:11px; border-radius:7px; font-weight:700; cursor:pointer; } button:disabled { opacity:.55; cursor:wait; }
-      #workspace { display:grid; gap:20px; } .summary { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; } .metric { padding:14px; background:#0c1628; border-radius:8px; } .metric strong { display:block; font-size:18px; margin-top:4px; overflow-wrap:anywhere; }
-      .columns { display:grid; grid-template-columns:1fr 1fr; gap:20px; } .feed { max-height:470px; overflow:auto; font:13px ui-monospace, monospace; } .event { padding:12px 0; border-bottom:1px solid var(--line); } .event:last-child { border:0; }
-      .finding { border-left:3px solid var(--warn); padding:10px 12px; background:#0c1628; margin:8px 0; } .critical,.high { border-color:var(--bad); } .info,.low { border-color:var(--good); }
-      pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:0; color:#c9d8f3; } .hidden { display:none; } .status { color:var(--muted); } .error { color:var(--bad); }
-      @media (max-width:800px) { main,.columns { grid-template-columns:1fr; } .summary { grid-template-columns:repeat(2,1fr); } header { padding:18px 20px; } }
-    </style>
-  </head>
-  <body>
-    <header><div><div class="label">Static-analysis vertical slice</div><h1>MIRA Investigation Console</h1></div><div id="status" class="status">Ready</div></header>
-    <main>
-      <aside class="card"><h2>New investigation</h2><form id="form"><label>PE sample<input name="sample" type="file" required /></label><label>Objective<textarea name="objective">Identify suspicious behavior</textarea></label><label>Maximum turns<input name="max_turns" type="number" value="10" min="1" /></label><label>Maximum tool calls<input name="max_tool_calls" type="number" value="20" min="1" /></label><button>Start static analysis</button></form><p class="label" style="margin-top:18px">Samples remain local to this server. Dynamic execution is not available.</p></aside>
-      <section id="workspace" class="hidden"><div class="summary card"><div class="metric"><span class="label">Verdict</span><strong id="verdict">—</strong></div><div class="metric"><span class="label">Status</span><strong id="run-status">—</strong></div><div class="metric"><span class="label">Evidence</span><strong id="evidence-count">0</strong></div><div class="metric"><span class="label">Tokens</span><strong id="tokens">0</strong></div></div><div class="columns"><article class="card"><h2>Live investigation</h2><div id="feed" class="feed"></div></article><article class="card"><h2>Findings</h2><div id="report"><p class="status">Results will appear when the agent submits its report.</p></div></article></div><article class="card"><h2>Working notes</h2><div id="notes"><p class="status">No notes recorded yet.</p></div></article><article class="card"><h2>Evidence & trace</h2><pre id="trace">Select a completed investigation to load its trace.</pre></article></section>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>MIRA // Investigation Console</title>
+<style>
+/* ==========================================================================
+   MIRA design tokens
+   Every colour has one job. Components read role tokens, never raw hex.
+   ========================================================================== */
+:root {
+  /* surfaces */
+  --bg: #090912;
+  --sidebar: #0D0D1A;
+  --panel: #131324;
+  --panel-2: #19192F;
+  --well: #07070F;
+  --border: #30304D;
+  --text: #F1F0FF;
+  --text-2: #A6A6C5;
+  --text-3: #6E6E91;
+
+  /* palette */
+  --cyan: #38E8FF;
+  --purple: #A970FF;
+  --magenta: #FF4FD8;
+  --lime: #C6FF5C;
+  --amber: #FFBE55;
+  --coral: #FF6174;
+  --blue: #6585FF;
+
+  /* navigation */
+  --nav-overview: var(--cyan);
+  --nav-runs: var(--purple);
+  --nav-new: var(--magenta);
+  --nav-trace: var(--amber);
+
+  /* lifecycle */
+  --st-queued: var(--amber);
+  --st-running: var(--cyan);
+  --st-completed: var(--lime);
+  --st-failed: var(--coral);
+  --st-idle: var(--text-3);
+
+  /* agents */
+  --ag-coordinator: var(--cyan);
+  --ag-static: var(--purple);
+  --ag-dynamic: var(--magenta);
+  --ag-forensics: var(--amber);
+
+  /* evidence */
+  --ev-pe: var(--purple);
+  --ev-meta: var(--cyan);
+  --ev-strings: var(--magenta);
+  --ev-warn: var(--amber);
+  --ev-crit: var(--coral);
+  --ev-done: var(--lime);
+
+  /* terminal */
+  --tm-sys: var(--cyan);
+  --tm-orch: var(--purple);
+  --tm-agent: var(--magenta);
+  --tm-warn: var(--amber);
+  --tm-err: var(--coral);
+  --tm-ok: var(--lime);
+  --tm-neutral: var(--text-2);
+
+  /* data values / links */
+  --data: var(--blue);
+
+  /* type */
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-ui: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  /* spacing (4px pixel grid) */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
+
+  /* pixel effects */
+  --grid-line: rgba(101, 133, 255, .055);
+  --hard-shadow: 3px 3px 0 0 #000;
+  --scanline: rgba(255, 255, 255, .022);
+}
+
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body {
+  margin: 0;
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 24px 24px;
+  color: var(--text);
+  font: 14px/1.5 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+/* CRT scanlines — static, low contrast, never intercepts input */
+body::after {
+  content: "";
+  position: fixed; inset: 0;
+  pointer-events: none;
+  z-index: 1000;
+  background: repeating-linear-gradient(to bottom, var(--scanline) 0 1px, transparent 1px 3px);
+}
+button, input, textarea { font: inherit; color: inherit; }
+svg.pxtext, svg.sprite { display: block; image-rendering: pixelated; flex: none; }
+
+.sr-only {
+  position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.mono { font-family: var(--font-mono); }
+.muted { color: var(--text-2); }
+.faint { color: var(--text-3); }
+
+/* pixel focus ring: crisp outline + offset hard shadow */
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid var(--magenta);
+  outline-offset: 2px;
+  box-shadow: 4px 4px 0 0 rgba(255, 79, 216, .35);
+}
+
+.skip {
+  position: absolute; left: 8px; top: -60px; z-index: 2000;
+  background: var(--magenta); color: #000; padding: 8px 12px;
+  font: 700 12px var(--font-mono); text-decoration: none;
+}
+.skip:focus { top: 8px; }
+
+/* ==========================================================================
+   Layout
+   ========================================================================== */
+.app { display: grid; grid-template-columns: 244px minmax(0, 1fr); min-height: 100vh; }
+
+.sidebar {
+  position: sticky; top: 0; height: 100vh;
+  display: flex; flex-direction: column; gap: var(--s4);
+  padding: var(--s4) var(--s3);
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  z-index: 30;
+}
+.brand {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s1) var(--s2) var(--s4);
+  border-bottom: 1px dashed var(--border);
+}
+.brand-sub { font: 600 10px/1.2 var(--font-mono); letter-spacing: .16em; color: var(--text-2); margin-top: 6px; }
+
+.nav { display: flex; flex-direction: column; gap: 6px; }
+.nav-label { font: 600 10px var(--font-mono); letter-spacing: .18em; color: var(--text-3); padding: 0 var(--s2); margin-bottom: 2px; }
+.nav-btn {
+  --c: var(--cyan);
+  position: relative;
+  display: flex; align-items: center; gap: var(--s3);
+  width: 100%; padding: 10px var(--s3);
+  background: transparent; border: 1px solid transparent;
+  color: var(--text-2);
+  font: 600 12px/1 var(--font-mono); letter-spacing: .1em; text-transform: uppercase;
+  text-align: left; cursor: pointer;
+}
+.nav-btn .ico { color: var(--c); }
+.nav-btn:hover { color: var(--text); background: color-mix(in srgb, var(--c) 7%, transparent); border-color: color-mix(in srgb, var(--c) 28%, transparent); }
+.nav-btn[aria-current="page"] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--c) 11%, transparent);
+  border-color: var(--c);
+  box-shadow: 0 0 16px -10px var(--c);
+}
+.nav-btn[aria-current="page"]::before {
+  content: ""; position: absolute; left: -13px; top: 50%; transform: translateY(-50%);
+  width: 4px; height: 20px;
+  background: linear-gradient(var(--cyan), var(--purple));
+}
+.nav-btn .nav-dot { margin-left: auto; width: 6px; height: 6px; background: var(--c); opacity: 0; }
+.nav-btn[aria-current="page"] .nav-dot { opacity: 1; }
+
+.side-foot {
+  margin-top: auto; padding: var(--s3); display: grid; gap: var(--s2);
+  border: 1px dashed var(--border);
+  font: 11px/1.5 var(--font-mono); color: var(--text-2);
+}
+.side-foot strong { color: var(--amber); font-weight: 600; letter-spacing: .08em; }
+
+.main-col { min-width: 0; display: flex; flex-direction: column; }
+
+.topbar {
+  position: sticky; top: 0; z-index: 25;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s4);
+  padding: var(--s3) var(--s5);
+  background: rgba(9, 9, 18, .96);
+  border-bottom: 1px solid var(--border);
+}
+/* segmented strip: one segment per navigation colour */
+.topbar::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -3px; height: 2px;
+  background: linear-gradient(90deg,
+    var(--nav-overview) 0 25%, var(--nav-runs) 25% 50%, var(--nav-new) 50% 75%, var(--nav-trace) 75% 100%);
+  -webkit-mask: repeating-linear-gradient(90deg, #000 0 12px, transparent 12px 16px);
+          mask: repeating-linear-gradient(90deg, #000 0 12px, transparent 12px 16px);
+  opacity: .55;
+}
+.tb-title { color: var(--text); display: flex; align-items: center; gap: var(--s3); min-width: 0; }
+.tb-meta { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; justify-content: flex-end; }
+
+.tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 8px; border: 1px solid var(--border); background: var(--panel);
+  font: 600 11px/1 var(--font-mono); letter-spacing: .08em; color: var(--text-2);
+  white-space: nowrap;
+}
+.tag-id { color: var(--text); max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+
+.sysind { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid var(--border); background: var(--panel); }
+.sysind .sq { width: 8px; height: 8px; }
+.sysind .lbl { font: 600 11px/1 var(--font-mono); letter-spacing: .1em; color: var(--text-2); margin-left: 2px; }
+
+main { padding: var(--s5); display: grid; gap: var(--s5); align-content: start; }
+main:focus { outline: none; }
+
+.view[hidden] { display: none !important; }
+.view { display: grid; gap: var(--s4); }
+.view-hd { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s4); }
+.view-hd h1 { margin: 0; color: var(--text); }
+.view-sub { margin: 8px 0 0; color: var(--text-2); font-size: 13px; }
+.px-cluster { opacity: .9; }
+
+.grid-2 { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: var(--s4); align-items: start; }
+
+/* ==========================================================================
+   Panels — corner brackets drawn in the panel's role colour (--edge)
+   ========================================================================== */
+.panel {
+  --edge: var(--border);
+  position: relative; min-width: 0;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  background-image:
+    linear-gradient(var(--edge), var(--edge)), linear-gradient(var(--edge), var(--edge)),
+    linear-gradient(var(--edge), var(--edge)), linear-gradient(var(--edge), var(--edge)),
+    linear-gradient(var(--edge), var(--edge)), linear-gradient(var(--edge), var(--edge)),
+    linear-gradient(var(--edge), var(--edge)), linear-gradient(var(--edge), var(--edge));
+  background-repeat: no-repeat;
+  background-size: 12px 2px, 2px 12px, 12px 2px, 2px 12px, 12px 2px, 2px 12px, 12px 2px, 2px 12px;
+  background-position: 0 0, 0 0, 100% 0, 100% 0, 0 100%, 0 100%, 100% 100%, 100% 100%;
+  padding: var(--s4);
+}
+.panel-hd {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
+  margin: 0 0 var(--s4); padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.panel-hd h2 { margin: 0; color: var(--edge); display: flex; align-items: center; gap: var(--s2); }
+.panel-hd h2::before { content: ""; width: 6px; height: 6px; background: var(--edge); box-shadow: 8px 0 0 color-mix(in srgb, var(--edge) 40%, transparent); margin-right: 8px; }
+.panel-tools { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.panel-note { margin: var(--s3) 0 0; font-size: 12px; color: var(--text-3); }
+
+/* ==========================================================================
+   Controls
+   ========================================================================== */
+.btn {
+  --c: var(--purple);
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 9px 14px;
+  font: 700 12px/1 var(--font-mono); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 2px solid color-mix(in srgb, var(--c) 65%, var(--border));
+  box-shadow: var(--hard-shadow);
+  cursor: pointer; white-space: nowrap;
+  transition: transform .08s steps(2), box-shadow .08s steps(2), background-color .12s, border-color .12s;
+}
+.btn:hover { background: color-mix(in srgb, var(--c) 16%, var(--panel-2)); border-color: var(--c); }
+.btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 0 #000; }
+.btn[disabled] { opacity: .45; cursor: not-allowed; transform: none; box-shadow: var(--hard-shadow); }
+.btn-sm { padding: 6px 9px; font-size: 11px; box-shadow: 2px 2px 0 0 #000; }
+.btn-ghost { background: transparent; box-shadow: none; border-color: var(--border); color: var(--text-2); }
+.btn-ghost:hover { color: var(--text); }
+.btn-ghost:active { transform: translate(1px, 1px); box-shadow: none; }
+.btn-ghost[aria-pressed="true"] { color: var(--text); border-color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+
+.btn-primary {
+  border: 2px solid transparent;
+  background:
+    linear-gradient(var(--panel-2), var(--panel-2)) padding-box,
+    linear-gradient(90deg, var(--cyan), var(--purple)) border-box;
+  box-shadow: var(--hard-shadow), 0 0 18px -8px var(--cyan);
+}
+.btn-primary:hover {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--cyan) 20%, var(--panel-2)), color-mix(in srgb, var(--purple) 24%, var(--panel-2))) padding-box,
+    linear-gradient(90deg, var(--cyan), var(--magenta)) border-box;
+}
+.btn-primary .plus { color: var(--cyan); }
+
+.copy {
+  padding: 2px 6px; margin-left: 6px;
+  font: 600 10px/1.4 var(--font-mono); letter-spacing: .08em;
+  background: transparent; color: var(--cyan);
+  border: 1px solid color-mix(in srgb, var(--cyan) 45%, transparent);
+  cursor: pointer; vertical-align: middle;
+}
+.copy:hover { background: color-mix(in srgb, var(--cyan) 14%, transparent); }
+.copy:active { transform: translate(1px, 1px); }
+
+/* status squares + chips */
+.sq { display: inline-block; width: 8px; height: 8px; background: var(--c, var(--text-3)); flex: none; }
+.sq.live { animation: blink 1s steps(2, jump-none) infinite; box-shadow: 0 0 8px var(--c); }
+.chip {
+  --c: var(--text-2);
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 7px;
+  font: 700 10.5px/1.2 var(--font-mono); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--c);
+  border: 1px solid color-mix(in srgb, var(--c) 50%, transparent);
+  background: color-mix(in srgb, var(--c) 10%, transparent);
+  white-space: nowrap;
+}
+.chip .sq { width: 6px; height: 6px; }
+.chip-solid { color: #07070F; background: var(--c); border-color: var(--c); }
+
+/* ==========================================================================
+   Metrics
+   ========================================================================== */
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s4); }
+.metric { --edge: var(--c); overflow: hidden; display: grid; gap: var(--s2); padding: var(--s4) var(--s4) var(--s4) calc(var(--s4) + 3px); }
+.metric::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--c); }
+/* dithered corner patch */
+.metric::after {
+  content: ""; position: absolute; right: 0; top: 0; width: 72px; height: 40px;
+  background: repeating-conic-gradient(color-mix(in srgb, var(--c) 30%, transparent) 0 25%, transparent 0 50%) 0 0 / 4px 4px;
+  -webkit-mask: linear-gradient(225deg, #000, transparent 70%);
+          mask: linear-gradient(225deg, #000, transparent 70%);
+  pointer-events: none;
+}
+.metric-hd { display: flex; align-items: center; gap: var(--s2); color: var(--c); font: 700 11px/1.2 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; }
+.metric-val { font: 700 36px/1 var(--font-mono); color: var(--text); letter-spacing: -.02em; }
+.metric-val.dim { color: var(--text-3); }
+.metric-note { font-size: 12px; color: var(--text-2); }
+
+/* ==========================================================================
+   Lifecycle track
+   ========================================================================== */
+.lc { display: flex; align-items: center; padding: var(--s3) var(--s2) var(--s4); overflow-x: auto; }
+.lc-node { --c: var(--text-3); display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 88px; }
+.lc-box { width: 20px; height: 20px; border: 2px solid var(--c); position: relative; background: transparent; }
+.lc-box::after { content: ""; position: absolute; inset: 4px; background: transparent; }
+.lc-lbl { font: 700 10.5px var(--font-mono); letter-spacing: .14em; color: var(--text-3); }
+.lc-node.pending { opacity: .5; }
+.lc-node.pending .lc-box { border-style: dashed; border-color: var(--border); }
+.lc-node.done .lc-box { background: color-mix(in srgb, var(--c) 25%, transparent); }
+.lc-node.done .lc-box::after { background: var(--c); }
+.lc-node.done .lc-lbl, .lc-node.active .lc-lbl { color: var(--c); }
+.lc-node.active .lc-box { background: color-mix(in srgb, var(--c) 25%, transparent); animation: node-pulse 1.4s steps(4) infinite; }
+.lc-node.active .lc-box::after { background: var(--c); animation: blink 1s steps(2, jump-none) infinite; }
+.lc-node.skipped { opacity: .3; }
+.lc-line { flex: 1 1 40px; min-width: 32px; height: 2px; margin-bottom: 22px; background: repeating-linear-gradient(90deg, var(--border) 0 4px, transparent 4px 8px); }
+.lc-line.done { background: linear-gradient(90deg, var(--from), var(--to)); }
+.lc-line.active { background: repeating-linear-gradient(90deg, var(--from) 0 6px, transparent 6px 10px); background-size: 20px 2px; animation: march .8s linear infinite; }
+.lc-end { display: flex; flex-direction: column; gap: 10px; }
+.lc-end .lc-node { flex-direction: row; min-width: 0; gap: 10px; }
+
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px var(--s4); margin: 0; }
+.kv dt { font: 600 10.5px/1.7 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--text-3); }
+.kv dd { margin: 0; font: 12.5px/1.6 var(--font-mono); color: var(--text); overflow-wrap: anywhere; }
+.kv dd.prose { font-family: var(--font-ui); font-size: 13px; }
+
+/* ==========================================================================
+   Agents
+   ========================================================================== */
+.agents { display: grid; gap: var(--s2); }
+.agent {
+  --c: var(--text-3);
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--s3); align-items: center;
+  padding: 10px var(--s3);
+  background: var(--panel-2);
+  border: 1px solid var(--border); border-left: 3px solid var(--c);
+}
+.agent .ico { color: var(--c); }
+.agent-name { font: 700 12px/1.3 var(--font-mono); letter-spacing: .06em; color: var(--text); }
+.agent-state { display: flex; align-items: center; gap: 6px; margin-top: 4px; font: 11px/1.3 var(--font-mono); color: var(--text-2); }
+.agent.planned { background: transparent; border-left-style: dashed; }
+.agent.planned .agent-name { color: var(--text-2); }
+.agent.planned .ico { opacity: .45; }
+.agent-tag { display: inline-flex; align-items: center; gap: 5px; margin-right: 8px; font: 700 10.5px var(--font-mono); letter-spacing: .08em; color: var(--c); }
+.agent-tag::before { content: ""; width: 6px; height: 6px; background: var(--c); }
+
+/* ==========================================================================
+   Terminal
+   ========================================================================== */
+.term {
+  position: relative;
+  height: 440px; overflow: auto;
+  background: var(--well);
+  border: 1px solid var(--border);
+  padding: var(--s2) 0;
+  font: 12.5px/1.55 var(--font-mono);
+}
+.term::before { /* faint vignette */
+  content: ""; position: sticky; display: block; top: 0; height: 0;
+}
+.tl { --tc: var(--tm-neutral); display: grid; grid-template-columns: 64px 8px minmax(72px, 116px) minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 2px var(--s3); }
+.tl:hover { background: rgba(255, 255, 255, .03); }
+.tl-time { color: var(--text-3); }
+.tl-sq { width: 6px; height: 6px; margin-top: 7px; background: var(--tc); }
+.tl-kind { color: var(--tc); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-msg { color: var(--text); overflow-wrap: anywhere; min-width: 0; }
+.tl-client .tl-msg { color: var(--text-2); }
+.tl-toggle {
+  width: 22px; height: 20px; padding: 0;
+  background: transparent; color: var(--text-2);
+  border: 1px solid var(--border); cursor: pointer; font: 700 12px/1 var(--font-mono);
+}
+.tl-toggle:hover { color: var(--tc); border-color: var(--tc); }
+.tl-toggle[aria-expanded="true"] { color: var(--tc); border-color: var(--tc); background: color-mix(in srgb, var(--tc) 12%, transparent); }
+.tl-payload { grid-column: 3 / -1; margin: 4px 0 8px; padding: var(--s2) var(--s3); background: var(--panel); border: 1px solid var(--border); border-left: 2px solid var(--tc); overflow-x: auto; }
+.tone-sys { --tc: var(--tm-sys); }
+.tone-orch { --tc: var(--tm-orch); }
+.tone-agent { --tc: var(--tm-agent); }
+.tone-warn { --tc: var(--tm-warn); }
+.tone-err { --tc: var(--tm-err); }
+.tone-ok { --tc: var(--tm-ok); }
+.tone-neutral { --tc: var(--tm-neutral); }
+.term[data-filter="issues"] .tl:not(.tone-warn):not(.tone-err) { display: none; }
+.term[data-filter="activity"] .tl:not(.tone-agent):not(.tone-orch):not(.tone-ok) { display: none; }
+.cursor-line { padding: 2px var(--s3); color: var(--cyan); }
+.cursor { display: inline-block; width: 8px; height: 14px; vertical-align: -2px; margin-left: 6px; background: var(--cyan); animation: blink 1.1s steps(2, jump-none) infinite; }
+.term-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: var(--s3); font: 11px var(--font-mono); color: var(--text-3); }
+.term-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.term-legend i { width: 6px; height: 6px; background: var(--tc); display: inline-block; }
+
+/* ==========================================================================
+   Lists & table
+   ========================================================================== */
+.recent { display: grid; gap: 6px; }
+.recent-item {
+  --c: var(--text-3);
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--s3); align-items: center;
+  width: 100%; padding: 9px var(--s3);
+  background: var(--panel-2); border: 1px solid var(--border);
+  text-align: left; cursor: pointer;
+}
+.recent-item:hover { border-color: color-mix(in srgb, var(--purple) 60%, var(--border)); }
+.recent-item[aria-current="true"] { border-color: var(--magenta); box-shadow: inset 3px 0 0 var(--magenta); }
+.ri-name { font: 600 12.5px/1.3 var(--font-mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ri-sub { font: 11px/1.3 var(--font-mono); color: var(--text-3); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); }
+table.runs { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.runs th {
+  text-align: left; padding: 10px var(--s3);
+  font: 700 10.5px var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--text-3);
+  background: var(--panel-2); border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+table.runs td { padding: 10px var(--s3); border-bottom: 1px solid var(--border); vertical-align: middle; }
+table.runs tr:last-child td { border-bottom: 0; }
+table.runs tbody tr { cursor: pointer; }
+table.runs tbody tr:hover td { background: color-mix(in srgb, var(--purple) 6%, transparent); }
+table.runs tbody tr[aria-selected="true"] td { background: linear-gradient(90deg, color-mix(in srgb, var(--magenta) 12%, transparent), color-mix(in srgb, var(--purple) 5%, transparent)); }
+table.runs tbody tr[aria-selected="true"] td:first-child { box-shadow: inset 3px 0 0 var(--magenta); }
+.row-btn { background: none; border: 0; padding: 0; cursor: pointer; font: 600 12.5px var(--font-mono); color: var(--text); text-align: left; overflow-wrap: anywhere; }
+.row-btn:hover { color: var(--magenta); }
+.cell-obj { color: var(--text-2); max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cell-mono { font-family: var(--font-mono); font-size: 12px; color: var(--text-2); white-space: nowrap; }
+
+/* ==========================================================================
+   Evidence explorer
+   ========================================================================== */
+.ev-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-bottom: var(--s4); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--s2); }
+.ev-list { display: grid; gap: var(--s3); }
+.ev-card { --c: var(--text-3); background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--c); }
+.ev-card > summary {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2);
+  padding: 10px var(--s3); cursor: pointer; list-style: none;
+}
+.ev-card > summary::-webkit-details-marker { display: none; }
+.ev-card > summary::before { content: "+"; width: 14px; font: 700 13px/1 var(--font-mono); color: var(--c); }
+.ev-card[open] > summary::before { content: "\2212"; }
+.ev-card[open] > summary { border-bottom: 1px solid var(--border); }
+.ev-key { font: 700 13px var(--font-mono); color: var(--text); }
+.ev-count { font: 11px var(--font-mono); color: var(--text-3); }
+.ev-body { padding: var(--s3) var(--s4); overflow-x: auto; }
+.ev-tools { display: flex; justify-content: flex-end; margin-bottom: var(--s2); }
+.ev-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.65 var(--font-ui); color: var(--text); }
+.cat-pe { --c: var(--ev-pe); }
+.cat-meta { --c: var(--ev-meta); }
+.cat-strings { --c: var(--ev-strings); }
+.sev-warn { --c: var(--ev-warn); }
+.sev-crit { --c: var(--ev-crit); }
+.sev-info { --c: var(--text-2); }
+
+.prov { display: inline-flex; align-items: center; gap: 5px; padding: 2px 6px; font: 700 10px/1.3 var(--font-mono); letter-spacing: .1em; border: 1px dashed currentColor; }
+.prov-model { color: var(--purple); }
+.prov-observed { color: var(--cyan); border-style: solid; }
+.prov-input { color: var(--text-2); }
+
+/* JSON tree */
+.tree { font: 12.5px/1.65 var(--font-mono); }
+.tn > summary { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 0 4px; cursor: pointer; list-style: none; }
+.tn > summary::-webkit-details-marker { display: none; }
+.tn > summary::before { content: "+"; width: 10px; color: var(--text-3); font-weight: 700; }
+.tn[open] > summary::before { content: "\2212"; color: var(--text-2); }
+.tn > summary:hover { background: rgba(255, 255, 255, .03); }
+.tn-kids { margin-left: 9px; padding-left: 12px; border-left: 1px dashed var(--border); }
+.tn-leaf { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; padding: 0 4px 0 22px; }
+.tk { color: var(--text-2); }
+.tk.cat-pe, .tk.cat-meta, .tk.cat-strings { color: var(--c); }
+.tk-idx { color: var(--text-3); }
+.tn-type { color: var(--text-3); font-size: 11.5px; }
+.tn-prev { color: var(--text-3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+.tv-str { color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.tv-str::before, .tv-str::after { content: '"'; color: var(--text-3); }
+.tv-num { color: var(--data); }
+.tv-null { color: var(--text-3); font-style: italic; }
+.tv-hash { color: var(--cyan); overflow-wrap: anywhere; }
+.more { margin-left: 6px; padding: 0 5px; background: none; border: 1px solid var(--border); color: var(--blue); cursor: pointer; font: 10.5px/1.5 var(--font-mono); }
+.more:hover { border-color: var(--blue); }
+
+/* ==========================================================================
+   Notices, empty states, forms
+   ========================================================================== */
+.notice { --c: var(--amber); padding: var(--s3) var(--s4); border: 1px solid color-mix(in srgb, var(--c) 45%, transparent); border-left: 3px solid var(--c); background: color-mix(in srgb, var(--c) 7%, var(--panel)); font-size: 13px; color: var(--text); }
+.notice-title { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font: 700 11px var(--font-mono); letter-spacing: .12em; color: var(--c); text-transform: uppercase; }
+.notice pre { margin: var(--s2) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 var(--font-mono); color: var(--text); }
+.notice details summary { cursor: pointer; margin-top: var(--s2); font: 600 11px var(--font-mono); color: var(--text-2); letter-spacing: .08em; }
+.notice details pre { max-height: 360px; overflow: auto; background: var(--well); padding: var(--s3); border: 1px solid var(--border); }
+
+.empty { display: grid; justify-items: center; gap: var(--s3); padding: var(--s6) var(--s4); text-align: center; color: var(--text-2); }
+.empty p { margin: 0; max-width: 46ch; font-size: 13px; }
+.empty .pxtext { color: var(--text-2); }
+
+.form { --edge: var(--magenta); display: grid; gap: var(--s5); max-width: 860px; }
+.field { display: grid; gap: var(--s2); }
+.field-lbl { font: 700 11px var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--text-2); }
+.field-hint { font-size: 12px; color: var(--text-3); }
+.input, .textarea {
+  width: 100%; padding: 10px var(--s3);
+  background: var(--well); color: var(--text);
+  border: 2px solid var(--border);
+  font: 13px/1.5 var(--font-mono);
+}
+.textarea { min-height: 96px; resize: vertical; }
+.input:hover, .textarea:hover { border-color: color-mix(in srgb, var(--purple) 55%, var(--border)); }
+.input:focus-visible, .textarea:focus-visible { border-color: var(--cyan); }
+.limits { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s4); }
+
+.drop {
+  position: relative;
+  display: grid; justify-items: center; gap: var(--s2);
+  padding: var(--s6) var(--s4);
+  border: 2px dashed color-mix(in srgb, var(--magenta) 50%, var(--border));
+  background:
+    repeating-conic-gradient(rgba(255, 79, 216, .05) 0 25%, transparent 0 50%) 0 0 / 6px 6px,
+    var(--well);
+  cursor: pointer; text-align: center;
+}
+.drop:hover, .drop.dragging { border-style: solid; border-color: var(--magenta); box-shadow: 0 0 22px -12px var(--magenta); }
+.drop:focus-within { outline: 2px solid var(--magenta); outline-offset: 2px; }
+.drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.drop-title { font: 700 13px var(--font-mono); letter-spacing: .08em; color: var(--text); }
+.drop-title u { color: var(--magenta); text-decoration-thickness: 2px; }
+.drop-file { font: 12px var(--font-mono); color: var(--text-2); overflow-wrap: anywhere; }
+.drop.has-file .drop-file { color: var(--cyan); }
+.form-actions { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.form-error { color: var(--coral); font: 12.5px/1.5 var(--font-mono); }
+
+.trace-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-bottom: var(--s4); }
+.msgs { display: grid; gap: var(--s2); }
+.msg { --c: var(--text-3); padding: var(--s3); background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--c); }
+.msg-hd { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-bottom: var(--s2); font: 11px var(--font-mono); color: var(--text-3); }
+.msg-role { font: 700 11px var(--font-mono); letter-spacing: .1em; color: var(--c); text-transform: uppercase; }
+.msg-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 var(--font-ui); }
+.section-lbl { display: flex; align-items: center; gap: var(--s2); margin: var(--s5) 0 var(--s3); font: 700 11px var(--font-mono); letter-spacing: .14em; color: var(--text-2); text-transform: uppercase; }
+.section-lbl::after { content: ""; flex: 1; height: 1px; background: repeating-linear-gradient(90deg, var(--border) 0 4px, transparent 4px 8px); }
+
+/* ==========================================================================
+   Motion
+   ========================================================================== */
+@keyframes blink { 50% { opacity: .15; } }
+@keyframes march { to { background-position: 20px 0; } }
+@keyframes node-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 60%, transparent); }
+  100% { box-shadow: 0 0 0 8px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* ==========================================================================
+   Responsive
+   ========================================================================== */
+@media (max-width: 1180px) {
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-2 { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 880px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .sidebar { position: static; height: auto; padding: var(--s3); gap: var(--s3); border-right: 0; border-bottom: 1px solid var(--border); }
+  .brand { padding-bottom: var(--s3); }
+  .nav { flex-direction: row; overflow-x: auto; gap: 6px; }
+  .nav-label, .side-foot, .nav-btn .nav-dot { display: none; }
+  .nav-btn { width: auto; flex: none; }
+  .nav-btn[aria-current="page"]::before { left: 0; right: 0; top: auto; bottom: -5px; width: auto; height: 3px; transform: none; background: linear-gradient(90deg, var(--cyan), var(--purple)); }
+  .topbar { position: static; padding: var(--s3) var(--s4); flex-wrap: wrap; }
+  .tb-title { display: none !important; }
+  .tb-meta { justify-content: flex-start; }
+  main { padding: var(--s4); }
+  .term { height: 360px; }
+  .tl { grid-template-columns: 8px minmax(0, 1fr) auto; }
+  .tl-time { display: none; }
+  .tl-kind { grid-column: 2; }
+  .tl-msg { grid-column: 2; }
+  .tl-toggle { grid-column: 3; grid-row: 1; }
+  .tl-payload { grid-column: 1 / -1; }
+}
+@media (max-width: 560px) {
+  .metrics { grid-template-columns: minmax(0, 1fr); }
+  .limits { grid-template-columns: minmax(0, 1fr); }
+  .view-hd .px-cluster { display: none; }
+  .kv { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .kv dd { margin-bottom: 8px; }
+}
+.tb-fallback { display: none; font: 700 13px var(--font-mono); letter-spacing: .1em; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<div class="app">
+  <aside class="sidebar" aria-label="Application">
+    <div class="brand">
+      <span id="logo"></span>
+      <div>
+        <div id="brand-word" aria-hidden="true"></div>
+        <div class="brand-sub">INVESTIGATION CONSOLE</div>
+      </div>
+    </div>
+
+    <nav class="nav" aria-label="Primary">
+      <div class="nav-label">WORKSPACE</div>
+      <button type="button" class="nav-btn" data-view="overview" style="--c: var(--nav-overview)"><span class="ico" data-icon="overview"></span><span>Overview</span><span class="nav-dot"></span></button>
+      <button type="button" class="nav-btn" data-view="investigations" style="--c: var(--nav-runs)"><span class="ico" data-icon="runs"></span><span>Investigations</span><span class="nav-dot"></span></button>
+      <button type="button" class="nav-btn" data-view="new" style="--c: var(--nav-new)"><span class="ico" data-icon="new"></span><span>New Investigation</span><span class="nav-dot"></span></button>
+      <button type="button" class="nav-btn" data-view="trace" style="--c: var(--nav-trace)"><span class="ico" data-icon="trace"></span><span>Trace Inspector</span><span class="nav-dot"></span></button>
+    </nav>
+
+    <div class="side-foot">
+      <strong>LIVE SAMPLES</strong>
+      <span>Uploads are real malware. The server listens on loopback only and has no auth.</span>
+      <span class="faint">Run records live in server memory and clear on restart.</span>
+    </div>
+  </aside>
+
+  <div class="main-col">
+    <header class="topbar">
+      <div class="tb-title">
+        <span id="tb-title" aria-hidden="true"></span>
+        <span class="tb-fallback" aria-hidden="true">MIRA</span>
+        <span class="sr-only">MIRA // Investigation Console</span>
+      </div>
+      <div class="tb-meta">
+        <div class="sysind" id="sysind" role="status" aria-live="polite"></div>
+        <span class="tag" id="instance"></span>
+        <span class="tag tag-id" id="sel-id" title="Selected investigation">NO RUN SELECTED</span>
+        <button type="button" class="btn btn-primary" id="tb-new"><span class="plus" aria-hidden="true">+</span> New investigation</button>
+      </div>
+    </header>
+
+    <main id="main" tabindex="-1">
+      <!-- ============================ OVERVIEW ============================ -->
+      <section class="view" id="view-overview" data-view="overview" aria-labelledby="h-overview">
+        <div class="view-hd">
+          <div>
+            <h1 id="h-overview" data-px="OVERVIEW" data-scale="3" style="color: var(--nav-overview)">Overview</h1>
+            <p class="view-sub">Investigations started from this browser session, with the selected run's live event stream.</p>
+          </div>
+          <span class="px-cluster" data-cluster></span>
+        </div>
+
+        <div class="metrics" id="metrics"></div>
+
+        <div class="grid-2">
+          <article class="panel" style="--edge: var(--cyan)">
+            <header class="panel-hd">
+              <h2 data-px="LIFECYCLE">Lifecycle</h2>
+              <div class="panel-tools" id="lc-chip"></div>
+            </header>
+            <div id="lifecycle"></div>
+          </article>
+
+          <article class="panel" style="--edge: var(--purple)">
+            <header class="panel-hd"><h2 data-px="AGENTS">Agents</h2></header>
+            <div id="agents" class="agents"></div>
+            <p class="panel-note">This build runs the static-analysis investigator. Other specialists are listed as planned and are never shown as active.</p>
+          </article>
+        </div>
+
+        <div class="grid-2">
+          <article class="panel" style="--edge: var(--magenta)">
+            <header class="panel-hd">
+              <h2 data-px="LIVE TERMINAL">Live terminal</h2>
+              <div class="panel-tools" role="group" aria-label="Terminal filter">
+                <span class="faint mono" id="term-count" style="font-size:11px"></span>
+                <button type="button" class="btn btn-ghost btn-sm" data-filter="all" aria-pressed="true" style="--c: var(--cyan)">All</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-filter="activity" aria-pressed="false" style="--c: var(--purple)">Activity</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-filter="issues" aria-pressed="false" style="--c: var(--amber)">Issues</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="autoscroll" aria-pressed="true" style="--c: var(--lime)">Follow</button>
+              </div>
+            </header>
+            <div class="term" id="term" role="log" aria-label="Event stream" tabindex="0" data-filter="all"></div>
+            <div class="term-legend" aria-label="Colour key">
+              <span class="tone-sys"><i></i>system / client</span>
+              <span class="tone-orch"><i></i>orchestration</span>
+              <span class="tone-agent"><i></i>agent / tool activity</span>
+              <span class="tone-warn"><i></i>warning</span>
+              <span class="tone-err"><i></i>error</span>
+              <span class="tone-ok"><i></i>completed</span>
+              <span class="tone-neutral"><i></i>other</span>
+            </div>
+          </article>
+
+          <article class="panel" style="--edge: var(--blue)">
+            <header class="panel-hd"><h2 data-px="RECENT">Recent</h2></header>
+            <div id="recent" class="recent"></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ========================= INVESTIGATIONS ========================= -->
+      <section class="view" id="view-investigations" data-view="investigations" aria-labelledby="h-runs" hidden>
+        <div class="view-hd">
+          <div>
+            <h1 id="h-runs" data-px="INVESTIGATIONS" data-scale="3" style="color: var(--nav-runs)">Investigations</h1>
+            <p class="view-sub">Runs submitted from this browser session. Select one to explore its result.</p>
+          </div>
+          <span class="px-cluster" data-cluster></span>
+        </div>
+
+        <article class="panel" style="--edge: var(--purple)">
+          <header class="panel-hd"><h2 data-px="RUNS">Runs</h2></header>
+          <div id="runs-table"></div>
+        </article>
+
+        <article class="panel" style="--edge: var(--purple)">
+          <header class="panel-hd">
+            <h2 data-px="EVIDENCE EXPLORER">Evidence explorer</h2>
+          </header>
+          <div id="evidence"></div>
+        </article>
+      </section>
+
+      <!-- ========================= NEW INVESTIGATION ====================== -->
+      <section class="view" id="view-new" data-view="new" aria-labelledby="h-new" hidden>
+        <div class="view-hd">
+          <div>
+            <h1 id="h-new" data-px="NEW INVESTIGATION" data-scale="3" style="color: var(--nav-new)">New investigation</h1>
+            <p class="view-sub">Upload a sample and set the investigator's objective and budget.</p>
+          </div>
+          <span class="px-cluster" data-cluster></span>
+        </div>
+
+        <form class="panel form" id="new-form" novalidate>
+          <div class="notice" style="--c: var(--amber)">
+            <div class="notice-title"><span class="sq" style="--c: var(--amber)"></span>Live malware handling</div>
+            The sample is written to <span class="mono">runs/ui/&lt;id&gt;/</span> on this host and analysed statically. Keep the server bound to loopback.
+          </div>
+
+          <label class="drop" id="drop" for="f-sample">
+            <input id="f-sample" name="sample" type="file" required aria-describedby="drop-file">
+            <span id="drop-art"></span>
+            <span class="drop-title">Drop a sample here or <u>browse</u></span>
+            <span class="drop-file" id="drop-file">No file selected</span>
+          </label>
+
+          <div class="field">
+            <label class="field-lbl" for="f-objective">Objective</label>
+            <textarea class="textarea" id="f-objective" name="objective" required>Identify suspicious behavior</textarea>
+            <span class="field-hint">What the investigator should establish about the sample.</span>
+          </div>
+
+          <div class="limits">
+            <div class="field">
+              <label class="field-lbl" for="f-turns">Max turns</label>
+              <input class="input" id="f-turns" name="max_turns" type="number" min="1" step="1" value="10" required inputmode="numeric">
+            </div>
+            <div class="field">
+              <label class="field-lbl" for="f-tools">Max tool calls</label>
+              <input class="input" id="f-tools" name="max_tool_calls" type="number" min="1" step="1" value="20" required inputmode="numeric">
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="f-submit"><span class="plus" aria-hidden="true">&#9654;</span> Start investigation</button>
+            <span class="form-error" id="form-error" role="alert"></span>
+          </div>
+        </form>
+      </section>
+
+      <!-- ========================== TRACE INSPECTOR ======================= -->
+      <section class="view" id="view-trace" data-view="trace" aria-labelledby="h-trace" hidden>
+        <div class="view-hd">
+          <div>
+            <h1 id="h-trace" data-px="TRACE INSPECTOR" data-scale="3" style="color: var(--nav-trace)">Trace inspector</h1>
+            <p class="view-sub">The full trace the investigator writes when a run completes.</p>
+          </div>
+          <span class="px-cluster" data-cluster></span>
+        </div>
+        <article class="panel" style="--edge: var(--amber)">
+          <header class="panel-hd"><h2 data-px="TRACE">Trace</h2><div class="panel-tools" id="trace-tools"></div></header>
+          <div id="trace"></div>
+        </article>
+      </section>
     </main>
-    <script>
-      const $ = id => document.getElementById(id);
-      const form = $('form'), feed = $('feed');
-      function line(text, cls) { const el=document.createElement('div'); el.className=`event ${cls ?? ''}`; el.textContent=text; feed.append(el); feed.scrollTop=feed.scrollHeight; }
-      function renderEvent(event) {
-        const turn=`[turn ${event.turn ?? '—'}]`;
-        if (event.kind==='tool_calls') { event.calls.forEach((call,i) => { const result=event.results[i]; const args=Object.entries(call.arguments).map(([k,v])=>`${k}=${JSON.stringify(v)}`).join(', '); line(`${turn} ${call.name}(${args}) → ${result.success ? 'ok' : 'error: '+result.error}`, result.success ? '' : 'error'); }); }
-        else if (event.kind==='memory_rejected') line(`${turn} notes rejected: ${event.failure}`, 'error');
-        else if (event.kind==='notes') { line(`${turn} notes: ${event.memory.hypotheses.length} hypotheses, ${event.memory.open_questions.length} open questions`, 'status'); renderNotes(event.memory, event.turn); }
-        else if (event.kind==='recall') line(`${turn} recall_observation(${event.handles.join(', ')})`);
-        else if (event.kind==='report_rejected') line(`${turn} report rejected: ${event.failure}`, 'error');
-        else if (event.kind==='empty') line(`${turn} (no tool call, no report)`, 'status');
-        else if (event.kind==='report') line(`${turn} report submitted: verdict=${event.report.verdict}`);
-        else line(`${turn} ${event.kind}`);
+  </div>
+</div>
+
+<div id="announce" class="sr-only" aria-live="polite"></div>
+
+<script>
+(() => {
+'use strict';
+
+/* ==========================================================================
+   Backend contract (see app.py) — nothing here invents routes or fields
+   ========================================================================== */
+const API = '/api/investigations';
+const TERMINAL = new Set(['completed', 'failed']);
+const STORE_KEY = 'mira.console.session.v1';
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+/* ==========================================================================
+   Safe DOM helpers — all dynamic content goes through text nodes
+   ========================================================================== */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === 'class') el.className = v;
+      else if (k === 'style') el.style.cssText += `;${v}`;
+      else if (k === 'vars') for (const [p, val] of Object.entries(v)) el.style.setProperty(p, val);
+      else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v === true ? '' : String(v));
+    }
+  }
+  appendKids(el, kids);
+  return el;
+}
+function appendKids(el, kids) {
+  for (const k of kids.flat(Infinity)) {
+    if (k == null || k === false) continue;
+    el.append(k instanceof Node ? k : document.createTextNode(String(k)));
+  }
+}
+function svg(tag, attrs) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, String(v));
+  return el;
+}
+const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + '\u2026' : s);
+const pad = (n) => String(n).padStart(2, '0');
+const fmtTime = (d) => { d = new Date(d); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+const fmtDate = (d) => { d = new Date(d); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${fmtTime(d)}`; };
+const fmtBytes = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(2)} MB`;
+const shortId = (id) => (id && id.length > 12 ? id.slice(0, 12) : id || '');
+
+function announce(msg) { const a = $('#announce'); a.textContent = ''; setTimeout(() => { a.textContent = msg; }, 30); }
+
+/* ==========================================================================
+   Pixel graphics — bitmap font and sprites (static content only)
+   ========================================================================== */
+const GLYPHS = {
+  A:[0x0e,0x11,0x11,0x1f,0x11,0x11,0x11], B:[0x1e,0x11,0x11,0x1e,0x11,0x11,0x1e], C:[0x0e,0x11,0x10,0x10,0x10,0x11,0x0e],
+  D:[0x1e,0x11,0x11,0x11,0x11,0x11,0x1e], E:[0x1f,0x10,0x10,0x1e,0x10,0x10,0x1f], F:[0x1f,0x10,0x10,0x1e,0x10,0x10,0x10],
+  G:[0x0e,0x11,0x10,0x17,0x11,0x11,0x0f], H:[0x11,0x11,0x11,0x1f,0x11,0x11,0x11], I:[0x0e,0x04,0x04,0x04,0x04,0x04,0x0e],
+  J:[0x07,0x02,0x02,0x02,0x02,0x12,0x0c], K:[0x11,0x12,0x14,0x18,0x14,0x12,0x11], L:[0x10,0x10,0x10,0x10,0x10,0x10,0x1f],
+  M:[0x11,0x1b,0x15,0x15,0x11,0x11,0x11], N:[0x11,0x11,0x19,0x15,0x13,0x11,0x11], O:[0x0e,0x11,0x11,0x11,0x11,0x11,0x0e],
+  P:[0x1e,0x11,0x11,0x1e,0x10,0x10,0x10], Q:[0x0e,0x11,0x11,0x11,0x15,0x12,0x0d], R:[0x1e,0x11,0x11,0x1e,0x14,0x12,0x11],
+  S:[0x0f,0x10,0x10,0x0e,0x01,0x01,0x1e], T:[0x1f,0x04,0x04,0x04,0x04,0x04,0x04], U:[0x11,0x11,0x11,0x11,0x11,0x11,0x0e],
+  V:[0x11,0x11,0x11,0x11,0x11,0x0a,0x04], W:[0x11,0x11,0x11,0x15,0x15,0x15,0x0a], X:[0x11,0x11,0x0a,0x04,0x0a,0x11,0x11],
+  Y:[0x11,0x11,0x0a,0x04,0x04,0x04,0x04], Z:[0x1f,0x01,0x02,0x04,0x08,0x10,0x1f],
+  0:[0x0e,0x11,0x13,0x15,0x19,0x11,0x0e], 1:[0x04,0x0c,0x04,0x04,0x04,0x04,0x0e], 2:[0x0e,0x11,0x01,0x02,0x04,0x08,0x1f],
+  3:[0x1f,0x02,0x04,0x02,0x01,0x11,0x0e], 4:[0x02,0x06,0x0a,0x12,0x1f,0x02,0x02], 5:[0x1f,0x10,0x1e,0x01,0x01,0x11,0x0e],
+  6:[0x06,0x08,0x10,0x1e,0x11,0x11,0x0e], 7:[0x1f,0x01,0x02,0x04,0x08,0x08,0x08], 8:[0x0e,0x11,0x11,0x0e,0x11,0x11,0x0e],
+  9:[0x0e,0x11,0x11,0x0f,0x01,0x02,0x0c],
+  '/':[0x00,0x01,0x02,0x04,0x08,0x10,0x00], '-':[0x00,0x00,0x00,0x1f,0x00,0x00,0x00], '.':[0x00,0x00,0x00,0x00,0x00,0x0c,0x0c],
+  ':':[0x00,0x0c,0x0c,0x00,0x0c,0x0c,0x00], '>':[0x08,0x04,0x02,0x01,0x02,0x04,0x08], '_':[0,0,0,0,0,0,0x1f], ' ':[0,0,0,0,0,0,0],
+};
+let gradSeq = 0;
+function pixelText(text, scale = 2, gradient = null) {
+  let d = '', x = 0;
+  for (const ch of String(text).toUpperCase()) {
+    const g = GLYPHS[ch] || GLYPHS[' '];
+    for (let r = 0; r < 7; r++) for (let c = 0; c < 5; c++) if ((g[r] >> (4 - c)) & 1) d += `M${x + c} ${r}h1v1h-1z`;
+    x += 6;
+  }
+  const w = Math.max(1, x - 1);
+  const el = svg('svg', { viewBox: `0 0 ${w} 7`, width: w * scale, height: 7 * scale, class: 'pxtext', 'aria-hidden': 'true', 'shape-rendering': 'crispEdges', focusable: 'false' });
+  const path = svg('path', { d });
+  if (gradient) {
+    const id = `pxg${++gradSeq}`;
+    const defs = svg('defs');
+    const lg = svg('linearGradient', { id, x1: 0, x2: 1, y1: 0, y2: 0 });
+    gradient.forEach((c, i) => { const s = svg('stop', { offset: i / (gradient.length - 1) }); s.setAttribute('style', `stop-color:${c}`); lg.append(s); });
+    defs.append(lg); el.append(defs);
+    path.setAttribute('fill', `url(#${id})`);
+  } else path.setAttribute('fill', 'currentColor');
+  el.append(path);
+  return el;
+}
+function sprite(rows, palette, scale = 2) {
+  const H = rows.length, W = rows[0].length;
+  const el = svg('svg', { viewBox: `0 0 ${W} ${H}`, width: W * scale, height: H * scale, class: 'sprite', 'aria-hidden': 'true', 'shape-rendering': 'crispEdges', focusable: 'false' });
+  const paths = {};
+  rows.forEach((row, y) => [...row].forEach((ch, x) => { if (ch !== '.') (paths[ch] ||= []).push(`M${x} ${y}h1v1h-1z`); }));
+  for (const [ch, parts] of Object.entries(paths)) {
+    const p = svg('path', { d: parts.join('') });
+    p.setAttribute('style', `fill:${palette[ch] || 'currentColor'}`);
+    el.append(p);
+  }
+  return el;
+}
+const ICON = {
+  logo: ['.....ccccc.....', '...cc.ppp.cc...', '.cc..pmmmp..cc.', 'c...pmmlmmp...c', 'c...pmmmmmp...c', '.cc..pmmmp..cc.', '...cc.ppp.cc...', '.....ccccc.....', '...............', '.c.b.c.b.c.b.c.'],
+  overview: ['xxx.xxx', 'xxx.xxx', 'xxx.xxx', '.......', 'xxx.xxx', 'xxx.xxx', 'xxx.xxx'],
+  runs: ['x.xxxxx', '.......', 'x.xxxxx', '.......', 'x.xxxxx', '.......', 'x.xxxxx'],
+  new: ['...x...', '...x...', '...x...', 'xxxxxxx', '...x...', '...x...', '...x...'],
+  trace: ['x......', 'xx.....', 'x.x...x', 'x..x.x.', 'x...x..', 'x......', 'xxxxxxx'],
+  active: ['..xxx..', '.x...x.', 'x..x..x', 'x.xxx.x', 'x..x..x', '.x...x.', '..xxx..'],
+  artifact: ['xxxxx..', 'x...xx.', 'x....x.', 'x.xx.x.', 'x....x.', 'x.xx.x.', 'xxxxxx.'],
+  threat: ['...x...', '..x.x..', '..x.x..', '.x.x.x.', '.x...x.', 'x..x..x', 'xxxxxxx'],
+  done: ['.......', '......x', '.....xx', 'x...xx.', 'xx.xx..', '.xxx...', '..x....'],
+  coordinator: ['...x...', '...x...', '..xxx..', 'xxx.xxx', '..xxx..', '...x...', '...x...'],
+  static: ['xxxxx..', 'x...xx.', 'x.x..x.', 'x....x.', 'x.xxxx.', 'x....x.', 'xxxxxx.'],
+  dynamic: ['....xx.', '...xx..', '..xx...', '.xxxxx.', '...xx..', '..xx...', '.xx....'],
+  forensics: ['.xxx...', 'x...x..', 'x...x..', 'x...x..', '.xxx...', '....xx.', '.....xx'],
+  magnifier: ['..aaaa.....', '.a....a....', 'a..cc..a...', 'a.c....a...', 'a......a...', '.a....a....', '..aaaamm...', '.......mm..', '........mm.', '.........mm'],
+  cluster: ['c.p....', 'cc..m..', '..l..p.', '.....pp'],
+};
+const PAL_LOGO = { c: 'var(--cyan)', p: 'var(--purple)', m: 'var(--magenta)', l: 'var(--lime)', b: 'var(--blue)' };
+const PAL_CLUSTER = { c: 'var(--cyan)', p: 'var(--purple)', m: 'var(--magenta)', l: 'var(--lime)' };
+const icon = (name, scale = 2) => sprite(ICON[name], { x: 'currentColor' }, scale);
+
+function emptyState(title, text) {
+  return h('div', { class: 'empty' },
+    sprite(ICON.magnifier, { a: 'var(--purple)', c: 'var(--cyan)', m: 'var(--magenta)' }, 4),
+    h('div', { 'aria-hidden': 'true' }, pixelText(title, 2)),
+    h('span', { class: 'sr-only' }, title),
+    text && h('p', null, text));
+}
+function notice(tone, title, ...body) {
+  return h('div', { class: 'notice', vars: { '--c': tone } },
+    h('div', { class: 'notice-title' }, h('span', { class: 'sq', vars: { '--c': tone } }), title), ...body);
+}
+function chip(label, color, { live = false, solid = false, title } = {}) {
+  return h('span', { class: `chip${solid ? ' chip-solid' : ''}`, vars: { '--c': color }, title },
+    h('span', { class: `sq${live ? ' live' : ''}`, vars: { '--c': solid ? '#07070F' : color } }), label);
+}
+function copyBtn(text, label = 'Copy') {
+  const btn = h('button', { type: 'button', class: 'copy', 'aria-label': `${label}: ${trunc(text, 40)}`,
+    onclick: (e) => { e.preventDefault(); e.stopPropagation(); copyText(text, btn); } }, 'COPY');
+  return btn;
+}
+async function copyText(text, btn) {
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch {
+    const ta = h('textarea', { class: 'sr-only', 'aria-hidden': 'true' }); ta.value = text;
+    document.body.append(ta); ta.select();
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    ta.remove();
+  }
+  announce(ok ? 'Copied to clipboard' : 'Copy failed');
+  if (btn) { btn.textContent = ok ? 'COPIED' : 'FAILED'; setTimeout(() => { btn.textContent = 'COPY'; }, 1200); }
+}
+
+/* ==========================================================================
+   State
+   ========================================================================== */
+const state = {
+  runs: new Map(),
+  order: [],
+  selected: null,
+  view: 'overview',
+  stream: null,
+  api: 'unknown',
+  trace: { id: null, status: 'idle', data: null, error: null, bytes: 0 },
+  autoscroll: true,
+};
+const selRun = () => (state.selected ? state.runs.get(state.selected) || null : null);
+
+const STATUS = {
+  queued: { label: 'QUEUED', c: 'var(--st-queued)' },
+  running: { label: 'RUNNING', c: 'var(--st-running)', live: true },
+  completed: { label: 'COMPLETED', c: 'var(--st-completed)' },
+  failed: { label: 'FAILED', c: 'var(--st-failed)' },
+  unknown: { label: 'SYNCING', c: 'var(--st-idle)' },
+};
+function statusOf(run) {
+  if (run.lost) return { key: 'lost', label: 'UNAVAILABLE', c: 'var(--st-idle)' };
+  const s = STATUS[run.status] || { label: String(run.status || '?').toUpperCase(), c: 'var(--text-2)' };
+  return { key: run.status, ...s };
+}
+const statusChip = (run) => { const s = statusOf(run); return chip(s.label, s.c, { live: !!s.live }); };
+
+function addRun(rec) {
+  const existing = state.runs.get(rec.id);
+  if (existing) return existing;
+  const run = {
+    id: rec.id,
+    status: rec.status || 'unknown',
+    objective: rec.objective || '',
+    sample_name: rec.sample_name || '',
+    result: rec.result ?? null,
+    error: rec.error ?? null,
+    traceback: null,
+    submittedAt: rec.submittedAt || Date.now(),
+    limits: rec.limits || null,
+    events: [],       // display log: backend events + labelled client connection lines
+    serverCount: 0,   // backend events received for this subscription
+    epoch: 0,
+    lost: false,
+  };
+  state.runs.set(run.id, run);
+  state.order.unshift(run.id);
+  return run;
+}
+
+/* Session-scoped convenience only: lets a reload re-attach to runs that
+   still exist in server memory. Not a history store. */
+function persist() {
+  try {
+    sessionStorage.setItem(STORE_KEY, JSON.stringify({
+      selected: state.selected,
+      runs: state.order.map((id) => {
+        const r = state.runs.get(id);
+        return { id, sample_name: r.sample_name, objective: r.objective, submittedAt: r.submittedAt, limits: r.limits };
+      }),
+    }));
+  } catch { /* storage unavailable: fine */ }
+}
+function restore() {
+  try {
+    const raw = sessionStorage.getItem(STORE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    const list = Array.isArray(data.runs) ? data.runs : [];
+    for (const r of list.slice().reverse()) {
+      if (r && typeof r.id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(r.id)) addRun({ ...r, status: 'unknown' });
+    }
+    if (typeof data.selected === 'string' && state.runs.has(data.selected)) state.selected = data.selected;
+  } catch { /* ignore corrupt storage */ }
+}
+
+/* ==========================================================================
+   API
+   ========================================================================== */
+async function errDetail(res) {
+  try {
+    const body = await res.json();
+    if (typeof body.detail === 'string') return body.detail;
+    if (Array.isArray(body.detail)) return body.detail.map((d) => `${(d.loc || []).slice(1).join('.') || 'request'}: ${d.msg}`).join('; ');
+  } catch { /* not JSON */ }
+  return `HTTP ${res.status}`;
+}
+
+async function refresh(id) {
+  const run = state.runs.get(id);
+  if (!run) return;
+  try {
+    const res = await fetch(`${API}/${encodeURIComponent(id)}`, { cache: 'no-store' });
+    state.api = 'ok';
+    if (res.status === 404) { run.lost = true; schedule(); return; }
+    if (!res.ok) throw new Error(await errDetail(res));
+    const rec = await res.json();
+    run.lost = false;
+    run.status = rec.status;
+    run.objective = rec.objective;
+    run.sample_name = rec.sample_name;
+    if (rec.result != null || TERMINAL.has(rec.status)) run.result = rec.result;
+    run.error = rec.error;
+  } catch {
+    state.api = 'down';
+  }
+  schedule();
+}
+
+/* ==========================================================================
+   SSE — one stream for the selected run. The server replays its full log to
+   every subscriber, so on reconnect we skip the prefix we already have.
+   ========================================================================== */
+function pushClient(run, message, tone = 'sys') {
+  run.events.push({ client: true, message, tone, rx: Date.now() });
+}
+function closeStream() {
+  const s = state.stream;
+  if (!s) return;
+  s.closed = true;
+  clearTimeout(s.timer);
+  if (s.es) s.es.close();
+  state.stream = null;
+}
+function openStream(id) {
+  closeStream();
+  const run = state.runs.get(id);
+  if (!run || run.lost) return;
+  run.events = [];
+  run.serverCount = 0;
+  run.epoch += 1;
+  const s = { id, es: null, connected: false, attempts: 0, timer: null, done: false, failed: false, closed: false, skip: 0 };
+  state.stream = s;
+  connect(s);
+}
+function connect(s) {
+  const run = state.runs.get(s.id);
+  if (!run || s.closed) return;
+  s.skip = run.serverCount;
+  pushClient(run, s.attempts ? `Reconnecting (attempt ${s.attempts})` : 'Opening event stream');
+  const es = new EventSource(`${API}/${encodeURIComponent(s.id)}/events`);
+  s.es = es;
+  es.onopen = () => {
+    if (s.closed) return;
+    s.connected = true;
+    state.api = 'ok';
+    pushClient(run, s.skip ? `Stream reconnected; skipping ${s.skip} replayed event(s)` : 'Stream connected; server replays the run log from the start');
+    schedule();
+  };
+  es.onmessage = (msg) => {
+    if (s.closed) return;
+    if (s.skip > 0) { s.skip -= 1; return; }
+    let ev;
+    try { ev = JSON.parse(msg.data); } catch { ev = { __raw: msg.data }; }
+    ingest(run, ev);
+    if (ev && TERMINAL.has(ev.kind)) {
+      s.done = true; s.connected = false; es.close();
+      pushClient(run, 'Stream closed after terminal event', ev.kind === 'completed' ? 'ok' : 'sys');
+      refresh(run.id);
+      if (state.selected === run.id) announce(`Investigation ${ev.kind}`);
+    }
+    schedule();
+  };
+  es.onerror = () => {
+    if (s.closed || s.done) return;
+    es.close();
+    s.connected = false;
+    pushClient(run, 'Stream interrupted', 'warn');
+    schedule();
+    refresh(s.id).then(() => {
+      if (s.closed) return;
+      if (run.lost) { pushClient(run, 'Investigation not found on the server (records are in memory and clear on restart)', 'err'); schedule(); return; }
+      if (TERMINAL.has(run.status) && run.serverCount > 0 && run.events.some((e) => e.ev && TERMINAL.has(e.ev.kind))) { s.done = true; schedule(); return; }
+      s.attempts += 1;
+      if (s.attempts > 6) { s.failed = true; pushClient(run, 'Stopped reconnecting after 6 attempts. Re-select the run to retry.', 'err'); schedule(); return; }
+      s.timer = setTimeout(() => connect(s), Math.min(10000, 600 * 2 ** (s.attempts - 1)));
+    });
+  };
+}
+function ingest(run, ev) {
+  run.serverCount += 1;
+  run.events.push({ ev, rx: Date.now() });
+  if (ev && TERMINAL.has(ev.kind)) {
+    run.status = ev.kind;
+    if ('result' in ev) run.result = ev.result;
+    run.error = ev.error ?? null;
+    run.traceback = ev.traceback ?? null;
+  } else if (run.status === 'queued' || run.status === 'unknown') {
+    // Backend sets "running" before investigate() can emit any turn.
+    run.status = 'running';
+  }
+}
+
+/* ==========================================================================
+   Event classification — colour follows actual event kind; neutral fallback
+   ========================================================================== */
+function kindOf(ev) {
+  if (!ev || typeof ev !== 'object') return 'raw';
+  if (ev.__raw !== undefined) return 'raw';
+  for (const k of ['kind', 'type', 'event']) if (typeof ev[k] === 'string' && ev[k]) return ev[k];
+  return 'event';
+}
+function toneOf(ev) {
+  if (!ev || typeof ev !== 'object' || ev.__raw !== undefined) return 'neutral';
+  const k = kindOf(ev).toLowerCase();
+  if (k === 'completed') return 'ok';
+  if (k === 'failed') return 'err';
+  if (/error|exception|fail/.test(k)) return 'err';
+  if (/warn|limit|budget|exhaust|timeout|retry/.test(k)) return 'warn';
+  if (/tool/.test(k)) return 'agent';
+  if (/turn|model|assistant|plan|reason|message|step|llm|thought|decision/.test(k)) return 'orch';
+  if (/start|connect|system|init|queue|status|config/.test(k)) return 'sys';
+  if (k === 'event') {
+    if ('tool' in ev || 'tool_calls' in ev || 'tool_name' in ev) return 'agent';
+    if ('turn' in ev) return 'orch';
+  }
+  return 'neutral';
+}
+function eventTime(ev, rx) {
+  if (ev && typeof ev === 'object') {
+    for (const k of ['timestamp', 'ts', 'time', 'created_at']) {
+      const v = ev[k];
+      if (v == null || typeof v === 'object') continue;
+      const d = typeof v === 'number' ? new Date(v < 1e12 ? v * 1000 : v) : new Date(v);
+      if (!isNaN(d)) return { text: fmtTime(d), src: `Event field "${k}"` };
+    }
+  }
+  return { text: fmtTime(rx), src: 'Time received by this browser (event has no timestamp)' };
+}
+function summarize(ev) {
+  if (!ev || typeof ev !== 'object') return String(ev);
+  if (ev.__raw !== undefined) return trunc(String(ev.__raw), 200);
+  if (ev.kind === 'completed') {
+    const id = ev.result && ev.result.metadata && ev.result.metadata.run_id;
+    return id ? `Investigation completed \u00b7 run ${id}` : 'Investigation completed';
+  }
+  if (ev.kind === 'failed') return `Investigation failed${ev.error ? `: ${ev.error}` : ''}`;
+  for (const k of ['message', 'summary', 'text', 'content', 'thought', 'action', 'tool', 'tool_name', 'name', 'status']) {
+    const v = ev[k];
+    if (typeof v === 'string' && v.trim()) return trunc(v.replace(/\s+/g, ' ').trim(), 220);
+  }
+  const parts = [];
+  if (typeof ev.turn === 'number' || typeof ev.turn === 'string') parts.push(`turn ${ev.turn}`);
+  const keys = Object.keys(ev).filter((k) => k !== 'kind');
+  if (keys.length) parts.push(`{ ${keys.slice(0, 6).join(', ')}${keys.length > 6 ? ', \u2026' : ''} }`);
+  return parts.join(' \u00b7 ') || '(empty event)';
+}
+
+/* ==========================================================================
+   Agents — only the static-analysis investigator exists in this backend
+   ========================================================================== */
+const AGENTS = [
+  { id: 'coordinator', name: 'Coordinator', color: 'var(--ag-coordinator)', implemented: false, match: /coord|orchestr/i },
+  { id: 'static', name: 'Static Analysis Agent', color: 'var(--ag-static)', implemented: true, match: /static/i },
+  { id: 'dynamic', name: 'Dynamic Analysis Agent', color: 'var(--ag-dynamic)', implemented: false, match: /dynamic|sandbox/i },
+  { id: 'forensics', name: 'Forensics Agent', color: 'var(--ag-forensics)', implemented: false, match: /forensic/i },
+];
+function agentOf(ev) {
+  if (!ev || typeof ev !== 'object') return null;
+  const v = ev.agent ?? ev.specialist ?? ev.actor;
+  if (typeof v !== 'string') return null;
+  return AGENTS.find((a) => a.match.test(v)) || null;
+}
+const agentTag = (a) => h('span', { class: 'agent-tag', vars: { '--c': a.color } }, a.name.replace(/ Agent$/, '').toUpperCase());
+
+/* ==========================================================================
+   Evidence classification — category from field names; severity only from
+   the record's own severity/flag fields
+   ========================================================================== */
+const INTERP_RE = /(summary|conclusion|assessment|reasoning|narrative|answer|report|explanation|rationale|hypothes|interpretation|verdict|thought|recommend)/i;
+const HASH_RE = /^(?:[a-f0-9]{32}|[a-f0-9]{40}|[a-f0-9]{64}|[a-f0-9]{128})$/i;
+function category(key) {
+  if (typeof key !== 'string') return null;
+  const k = key.toLowerCase();
+  if (/string/.test(k)) return 'strings';
+  if (/(^|_)(pe|sections?|imports?|exports?|headers?|optional_header|entry|entrypoint|entropy|resources?|overlay|rich|dlls?|symbols?|machine|subsystem|characteristics|tls|relocations?|signature|certificate)/.test(k)) return 'pe';
+  if (/(hash|sha1|sha256|sha512|md5|imphash|ssdeep|tlsh|size|mime|file|path|magic|format|metadata|run_id|sample|timestamp)/.test(k)) return 'meta';
+  return null;
+}
+const CATEGORY_LABEL = { pe: 'PE STRUCTURE', meta: 'METADATA', strings: 'STRINGS' };
+const CATEGORY_COLOR = { pe: 'var(--ev-pe)', meta: 'var(--ev-meta)', strings: 'var(--ev-strings)' };
+function severityOf(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  for (const k of ['severity', 'risk', 'level']) {
+    const s = v[k];
+    if (typeof s !== 'string') continue;
+    const t = s.toLowerCase();
+    if (/crit|high|sever/.test(t)) return { tone: 'crit', label: `${k}: ${s}` };
+    if (/med|moder|warn|susp/.test(t)) return { tone: 'warn', label: `${k}: ${s}` };
+    return { tone: 'info', label: `${k}: ${s}` };
+  }
+  if (v.malicious === true) return { tone: 'crit', label: 'malicious: true' };
+  if (v.suspicious === true) return { tone: 'warn', label: 'suspicious: true' };
+  return null;
+}
+const SEV_COLOR = { crit: 'var(--ev-crit)', warn: 'var(--ev-warn)', info: 'var(--text-2)' };
+const sevChip = (sev) => chip(sev.label, SEV_COLOR[sev.tone], { title: 'Reported by this record' });
+const provModel = () => h('span', { class: 'prov prov-model', title: 'Field name indicates model-generated interpretation' }, 'MODEL-GENERATED');
+
+/* ==========================================================================
+   JSON tree (lazy, text-only)
+   ========================================================================== */
+function keyEl(key) {
+  if (typeof key === 'number') return h('span', { class: 'tk tk-idx' }, `[${key}]`);
+  const cat = category(key);
+  return h('span', { class: `tk${cat ? ` cat-${cat}` : ''}` }, key);
+}
+function valueEl(v) {
+  if (v === null || v === undefined) return h('span', { class: 'tv-null' }, String(v));
+  if (typeof v === 'number' || typeof v === 'boolean') return h('span', { class: 'tv-num' }, String(v));
+  const s = String(v);
+  if (HASH_RE.test(s)) return h('span', null, h('span', { class: 'tv-hash' }, s), copyBtn(s, 'Copy hash'));
+  if (s.length > 320) {
+    const span = h('span', { class: 'tv-str' }, s.slice(0, 320) + '\u2026');
+    const btn = h('button', { type: 'button', class: 'more', 'aria-expanded': 'false', onclick: () => {
+      const open = btn.getAttribute('aria-expanded') !== 'true';
+      btn.setAttribute('aria-expanded', String(open));
+      span.textContent = open ? s : s.slice(0, 320) + '\u2026';
+      btn.textContent = open ? 'less' : `more (${s.length} chars)`;
+    } }, `more (${s.length} chars)`);
+    return h('span', null, span, btn);
+  }
+  return h('span', { class: 'tv-str' }, s);
+}
+function previewOf(obj) {
+  for (const k of ['name', 'id', 'kind', 'type', 'tool', 'title']) {
+    if (typeof obj[k] === 'string' && obj[k]) return h('span', { class: 'tn-prev' }, `${k}=${trunc(obj[k], 48)}`);
+  }
+  return null;
+}
+function treeNode(key, value, depth, openDepth) {
+  const isObj = value !== null && typeof value === 'object';
+  const kEl = key === undefined ? null : keyEl(key);
+  const interp = typeof key === 'string' && INTERP_RE.test(key);
+  if (!isObj) {
+    return h('div', { class: 'tn-leaf' }, kEl, kEl && h('span', { class: 'faint' }, ':'), valueEl(value), interp && provModel());
+  }
+  const isArr = Array.isArray(value);
+  const entries = isArr ? value.map((v, i) => [i, v]) : Object.entries(value);
+  const sev = severityOf(value);
+  const det = h('details', { class: 'tn' });
+  det.append(h('summary', null,
+    kEl || h('span', { class: 'tk' }, isArr ? 'array' : 'object'),
+    h('span', { class: 'tn-type' }, isArr ? `[${entries.length}]` : `{${entries.length}}`),
+    sev && sevChip(sev), interp && provModel(), !isArr && previewOf(value)));
+  let built = false;
+  const build = () => {
+    if (built) return;
+    built = true;
+    const kids = h('div', { class: 'tn-kids' });
+    det.append(kids);
+    renderChunked(kids, entries, ([k, v]) => treeNode(k, v, depth + 1, openDepth));
+  };
+  det.addEventListener('toggle', () => { if (det.open) build(); });
+  if (depth < openDepth && entries.length <= 60) { det.open = true; build(); }
+  return det;
+}
+function renderChunked(container, items, make, size = 150) {
+  let shown = 0;
+  const more = h('button', { type: 'button', class: 'more' });
+  const step = () => {
+    const end = Math.min(items.length, shown + size);
+    const frag = document.createDocumentFragment();
+    for (let i = shown; i < end; i++) frag.append(make(items[i], i));
+    shown = end;
+    more.remove();
+    container.append(frag);
+    if (shown < items.length) { more.textContent = `show ${Math.min(size, items.length - shown)} more of ${items.length - shown}`; container.append(more); }
+  };
+  more.addEventListener('click', step);
+  step();
+}
+function treeView(value, openDepth = 1) {
+  const wrap = h('div', { class: 'tree' });
+  if (value !== null && typeof value === 'object') {
+    const entries = Array.isArray(value) ? value.map((v, i) => [i, v]) : Object.entries(value);
+    if (!entries.length) wrap.append(h('span', { class: 'tv-null' }, Array.isArray(value) ? '[] empty' : '{} empty'));
+    renderChunked(wrap, entries, ([k, v]) => treeNode(k, v, 0, openDepth));
+  } else {
+    wrap.append(valueEl(value));
+  }
+  return wrap;
+}
+
+/* ==========================================================================
+   Rendering (rAF-batched, each panel skips work when its inputs are unchanged)
+   ========================================================================== */
+let rafPending = false;
+function schedule() {
+  if (rafPending) return;
+  rafPending = true;
+  requestAnimationFrame(() => { rafPending = false; renderAll(); });
+}
+function renderAll() {
+  renderHeader();
+  renderMetrics();
+  renderLifecycle();
+  renderAgents();
+  renderTerminal();
+  renderRecent();
+  renderTable();
+  renderEvidence();
+  renderTrace();
+}
+
+function renderHeader() {
+  const run = selRun();
+  const idEl = $('#sel-id');
+  idEl.textContent = run ? `RUN ${shortId(run.id)}` : 'NO RUN SELECTED';
+  idEl.title = run ? `Selected investigation: ${run.id}` : 'No investigation selected';
+
+  const st = state.stream;
+  const apiC = state.api === 'ok' ? 'var(--cyan)' : state.api === 'down' ? 'var(--coral)' : 'var(--text-3)';
+  const apiT = state.api === 'ok' ? 'reachable' : state.api === 'down' ? 'unreachable' : 'not contacted yet';
+  const sseLive = !!(st && st.connected);
+  const sseT = sseLive ? 'streaming' : st && st.failed ? 'disconnected' : st && st.done ? 'closed (run finished)' : 'idle';
+  const sseC = sseLive ? 'var(--purple)' : st && st.failed ? 'var(--coral)' : 'var(--text-3)';
+  const rs = run ? statusOf(run) : null;
+  const sig = [state.api, sseT, rs && rs.label].join('|');
+  const box = $('#sysind');
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  box.replaceChildren(
+    h('span', { class: 'sq', vars: { '--c': apiC }, title: `API: ${apiT}` }),
+    h('span', { class: `sq${sseLive ? ' live' : ''}`, vars: { '--c': sseC }, title: `Event stream: ${sseT}` }),
+    h('span', { class: `sq${rs && rs.live ? ' live' : ''}`, vars: { '--c': rs ? rs.c : 'var(--text-3)' }, title: `Selected run: ${rs ? rs.label.toLowerCase() : 'none'}` }),
+    h('span', { class: 'lbl' }, state.api === 'down' ? 'SYS OFFLINE' : 'SYS'),
+    h('span', { class: 'sr-only' }, `API ${apiT}; event stream ${sseT}; selected run ${rs ? rs.label.toLowerCase() : 'none'}`));
+}
+
+function metric({ label, value, color, iconName, note, dim, live }) {
+  return h('article', { class: 'panel metric', vars: { '--c': color } },
+    h('div', { class: 'metric-hd' }, icon(iconName, 2), h('span', null, label), live && h('span', { class: 'sq live', vars: { '--c': color } })),
+    h('div', { class: `metric-val${dim ? ' dim' : ''}` }, String(value)),
+    h('div', { class: 'metric-note' }, note));
+}
+function renderMetrics() {
+  const runs = [...state.runs.values()];
+  const live = runs.filter((r) => !r.lost);
+  const active = live.filter((r) => r.status === 'queued' || r.status === 'running').length;
+  const completed = live.filter((r) => r.status === 'completed').length;
+  const failed = live.filter((r) => r.status === 'failed').length;
+  const box = $('#metrics');
+  const sig = [active, runs.length, completed, failed].join('|');
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  box.replaceChildren(
+    metric({ label: 'Active investigations', value: active, color: 'var(--cyan)', iconName: 'active', live: active > 0, note: active ? 'queued or running now' : 'nothing running' }),
+    metric({ label: 'Artifacts submitted', value: runs.length, color: 'var(--purple)', iconName: 'artifact', note: 'samples uploaded this session' }),
+    metric({ label: 'Threats detected', value: '\u2014', color: 'var(--coral)', iconName: 'threat', dim: true, note: 'Not reported: the result schema has no verdict field' }),
+    metric({ label: 'Completed', value: completed, color: 'var(--lime)', iconName: 'done', note: failed ? `${failed} failed` : 'finished without error' }),
+  );
+}
+
+function lcNode(label, color, cls) {
+  return h('div', { class: `lc-node ${cls}`, vars: { '--c': color } }, h('span', { class: 'lc-box' }), h('span', { class: 'lc-lbl' }, label));
+}
+function lcLine(cls, from, to) { return h('span', { class: `lc-line ${cls}`, vars: { '--from': from, '--to': to || from } }); }
+function renderLifecycle() {
+  const box = $('#lifecycle');
+  const run = selRun();
+  const sig = run ? [run.id, run.status, run.lost, run.serverCount, !!run.result, run.error || ''].join('|') : 'none';
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  const chipBox = $('#lc-chip');
+  if (!run) {
+    chipBox.replaceChildren();
+    box.replaceChildren(emptyState('NO RUN SELECTED', 'Start an investigation to see it move through queued, running and its final state.'));
+    return;
+  }
+  chipBox.replaceChildren(statusChip(run));
+  const s = run.lost ? 'lost' : run.status;
+  const Q = 'var(--st-queued)', R = 'var(--st-running)', C = 'var(--st-completed)', F = 'var(--st-failed)';
+  const known = ['queued', 'running', 'completed', 'failed'].includes(s);
+  const q = !known ? 'pending' : s === 'queued' ? 'active' : 'done';
+  const r = !known || s === 'queued' ? 'pending' : s === 'running' ? 'active' : 'done';
+  const c = s === 'completed' ? 'done' : s === 'failed' ? 'skipped' : 'pending';
+  const f = s === 'failed' ? 'done' : s === 'completed' ? 'skipped' : 'pending';
+  const l1 = known && s !== 'queued' ? 'done' : '';
+  const l2 = s === 'running' ? 'active' : TERMINAL.has(s) ? 'done' : '';
+  const track = h('div', { class: 'lc', role: 'img', 'aria-label': `Lifecycle: ${statusOf(run).label.toLowerCase()}` },
+    lcNode('QUEUED', Q, q), lcLine(l1, Q, R), lcNode('RUNNING', R, r), lcLine(l2, R, s === 'failed' ? F : C),
+    h('div', { class: 'lc-end' }, lcNode('COMPLETED', C, c), lcNode('FAILED', F, f)));
+
+  const runId = run.result && run.result.metadata && run.result.metadata.run_id;
+  const kv = h('dl', { class: 'kv' },
+    h('dt', null, 'Investigation'), h('dd', null, run.id, copyBtn(run.id, 'Copy investigation ID')),
+    runId != null && [h('dt', null, 'Run ID'), h('dd', null, String(runId), copyBtn(String(runId), 'Copy run ID'))],
+    h('dt', null, 'Sample'), h('dd', null, run.sample_name || '\u2014'),
+    h('dt', null, 'Objective'), h('dd', { class: 'prose' }, run.objective || '\u2014'),
+    h('dt', null, 'Submitted'), h('dd', null, fmtDate(run.submittedAt), h('span', { class: 'faint' }, ' (this browser)')),
+    h('dt', null, 'Events'), h('dd', null, `${run.serverCount} received on this stream`),
+    run.limits && [h('dt', null, 'Limits'), h('dd', null, `${run.limits.turns} turns \u00b7 ${run.limits.tools} tool calls (configured)`)]);
+
+  const extra = [];
+  if (run.lost) extra.push(notice('var(--text-2)', 'Not on server', 'The server no longer has this run in memory, usually after a restart. Its files remain under ', h('span', { class: 'mono' }, `runs/ui/${run.id}/`), ' on the host.'));
+  else if (run.status === 'failed' && run.error) extra.push(notice('var(--coral)', 'Run failed', h('pre', null, trunc(String(run.error), 600)),
+    h('button', { type: 'button', class: 'btn btn-sm', vars: { '--c': 'var(--coral)' }, style: 'margin-top:10px', onclick: () => go('investigations') }, 'Open in evidence explorer')));
+  box.replaceChildren(track, kv, ...extra.map((e) => { e.style.marginTop = '16px'; return e; }));
+}
+
+function renderAgents() {
+  const box = $('#agents');
+  const run = selRun();
+  const sig = run ? `${run.id}|${run.status}|${run.lost}` : 'none';
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  box.replaceChildren(...AGENTS.map((a) => {
+    let stateEl;
+    if (!a.implemented) {
+      stateEl = h('div', { class: 'agent-state' }, h('span', { class: 'sq', vars: { '--c': 'var(--text-3)' } }), 'Planned \u00b7 not in this build');
+    } else {
+      let label = 'Available \u00b7 idle', c = 'var(--text-3)', live = false;
+      if (run && !run.lost) {
+        if (run.status === 'running') { label = `Running on ${trunc(run.sample_name, 32)}`; c = a.color; live = true; }
+        else if (run.status === 'queued') { label = 'Queued'; c = 'var(--st-queued)'; }
+        else if (run.status === 'completed') { label = 'Finished this run'; c = 'var(--st-completed)'; }
+        else if (run.status === 'failed') { label = 'Stopped \u00b7 run failed'; c = 'var(--st-failed)'; }
       }
-      function para(parent, text, cls) { const el=document.createElement('p'); if (cls) el.className=cls; el.textContent=text; parent.append(el); return el; }
-      function renderNotes(memory, turn) {
-        const notes=$('notes'); notes.replaceChildren();
-        para(notes, turn ? `As of turn ${turn}` : 'Final notes', 'label');
-        if (memory.understanding) para(notes, `Understanding: ${memory.understanding}`);
-        if (memory.hypotheses.length) para(notes, 'Hypotheses', 'label');
-        for (const h of memory.hypotheses) {
-          const item=document.createElement('div'); item.className=`finding ${h.status==='weakened' ? 'high' : h.status==='supported' ? 'info' : ''}`;
-          const title=document.createElement('strong'); title.textContent=`${h.id} [${h.status}, ${h.confidence.toFixed(2)}] ${h.statement}`; item.append(title);
-          const refs=[h.supporting_evidence.length && `supported by: ${h.supporting_evidence.join(', ')}`, h.contradicting_evidence.length && `weakened by: ${h.contradicting_evidence.join(', ')}`, h.unknowns && `unknowns: ${h.unknowns}`].filter(Boolean);
-          if (refs.length) para(item, refs.join(' · '), 'label');
-          notes.append(item);
-        }
-        if (memory.open_questions.length) { para(notes, 'Open questions', 'label'); memory.open_questions.forEach(q => para(notes, `${q.id} ${q.question}`)); }
-        if (memory.candidates.length) { para(notes, 'Candidate next steps', 'label'); memory.candidates.forEach(c => para(notes, `${c.id} ${c.investigation}`)); }
-      }
-      function renderResult(result) { if (result.memory) renderNotes(result.memory); $('verdict').textContent=result.verdict; $('evidence-count').textContent=result.evidence.length; $('tokens').textContent=result.metadata.total_tokens; const report=$('report'); report.replaceChildren(); const summary=document.createElement('p'); summary.textContent=result.summary; report.append(summary); for (const finding of result.findings) { const item=document.createElement('div'); item.className=`finding ${finding.severity}`; const title=document.createElement('strong'); title.textContent=finding.title; const description=document.createElement('p'); description.textContent=finding.description; const metadata=document.createElement('span'); metadata.className='label'; metadata.textContent=`${finding.severity} · ${finding.confidence} · ${finding.evidence_refs.map(x=>x.evidence_id).join(', ')}`; item.append(title,description,metadata); report.append(item); } if (result.recommended_actions.length) { const actions=document.createElement('p'); actions.className='label'; actions.textContent=`Recommended actions: ${result.recommended_actions.join(' · ')}`; report.append(actions); } }
-      async function loadTrace(id) { const response=await fetch(`/api/investigations/${id}/trace`); if(response.ok) $('trace').textContent=JSON.stringify(await response.json(),null,2); }
-      form.addEventListener('submit', async event => { event.preventDefault(); feed.replaceChildren(); $('notes').replaceChildren(); para($('notes'), 'No notes recorded yet.', 'status'); $('workspace').classList.remove('hidden'); $('status').textContent='Starting…'; form.querySelector('button').disabled=true; const response=await fetch('/api/investigations',{method:'POST',body:new FormData(form)}); if(!response.ok){ $('status').textContent=await response.text(); form.querySelector('button').disabled=false; return; } const run=await response.json(); $('run-status').textContent=run.status; const source=new EventSource(`/api/investigations/${run.id}/events`); source.onmessage=async ({data}) => { const event=JSON.parse(data); if(['completed','failed'].includes(event.kind)){ source.close(); form.querySelector('button').disabled=false; $('run-status').textContent=event.kind; $('status').textContent=event.kind==='completed'?'Complete':'Failed'; if(event.result){ renderResult(event.result); await loadTrace(run.id); } else { const error=document.createElement('p'); error.className='error'; error.textContent=event.error; $('report').replaceChildren(error); if (event.traceback) $('trace').textContent=event.traceback; } return; } renderEvent(event); }; });
-    </script>
-  </body>
+      stateEl = h('div', { class: 'agent-state' }, h('span', { class: `sq${live ? ' live' : ''}`, vars: { '--c': c } }), label);
+    }
+    return h('div', { class: `agent${a.implemented ? '' : ' planned'}`, vars: { '--c': a.color } },
+      h('span', { class: 'ico' }, icon(a.id, 3)),
+      h('div', null, h('div', { class: 'agent-name' }, a.name), stateEl));
+  }));
+}
+
+/* Terminal: append-only rendering so expanded payloads stay open */
+const term = { key: null, count: 0 };
+const cursorLine = h('div', { class: 'cursor-line', 'aria-hidden': 'true' }, '>', h('span', { class: 'cursor' }));
+function termLine(entry) {
+  if (entry.client) {
+    return h('div', { class: `tl tl-client tone-${entry.tone}` },
+      h('span', { class: 'tl-time', title: 'Client time' }, fmtTime(entry.rx)),
+      h('span', { class: 'tl-sq' }),
+      h('span', { class: 'tl-kind', title: 'Generated by this browser, not the backend' }, 'client'),
+      h('span', { class: 'tl-msg' }, entry.message),
+      h('span'));
+  }
+  const ev = entry.ev;
+  const kind = kindOf(ev);
+  const t = eventTime(ev, entry.rx);
+  const agent = agentOf(ev);
+  const payload = h('div', { class: 'tl-payload', hidden: true });
+  const btn = h('button', { type: 'button', class: 'tl-toggle', 'aria-expanded': 'false', 'aria-label': `Show ${kind} payload`,
+    onclick: () => {
+      const open = btn.getAttribute('aria-expanded') !== 'true';
+      btn.setAttribute('aria-expanded', String(open));
+      btn.textContent = open ? '\u2212' : '+';
+      if (open && !payload.firstChild) payload.append(treeView(ev, 1));
+      payload.hidden = !open;
+    } }, '+');
+  return h('div', { class: `tl tone-${toneOf(ev)}` },
+    h('span', { class: 'tl-time', title: t.src }, t.text),
+    h('span', { class: 'tl-sq' }),
+    h('span', { class: 'tl-kind', title: kind }, kind),
+    h('span', { class: 'tl-msg' }, agent && agentTag(agent), summarize(ev)),
+    btn, payload);
+}
+function renderTerminal() {
+  const box = $('#term');
+  const run = selRun();
+  const key = run ? `${run.id}#${run.epoch}` : 'none';
+  if (term.key !== key) { box.replaceChildren(); term.key = key; term.count = 0; }
+  $('#term-count').textContent = run ? `${run.serverCount} event${run.serverCount === 1 ? '' : 's'}` : '';
+  if (!run) {
+    if (!box.firstChild) box.append(emptyState('NO STREAM', 'Select or start an investigation to stream its events here.'));
+    return;
+  }
+  const list = run.events;
+  if (term.count === list.length) { cursorLine.hidden = !(state.stream && state.stream.id === run.id && state.stream.connected); return; }
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+  const first = term.count === 0;
+  if (first) box.replaceChildren();
+  const frag = document.createDocumentFragment();
+  for (let i = term.count; i < list.length; i++) frag.append(termLine(list[i]));
+  term.count = list.length;
+  cursorLine.remove();
+  box.append(frag, cursorLine);
+  cursorLine.hidden = !(state.stream && state.stream.id === run.id && state.stream.connected);
+  if (state.autoscroll && (nearBottom || first)) box.scrollTop = box.scrollHeight;
+}
+
+function renderRecent() {
+  const box = $('#recent');
+  const sig = state.order.slice(0, 6).map((id) => { const r = state.runs.get(id); return `${id}:${r.status}:${r.lost}`; }).join(',') + `|${state.selected}`;
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  if (!state.order.length) {
+    box.replaceChildren(emptyState('NO RUNS YET', 'Investigations you start appear here.'),
+      h('button', { type: 'button', class: 'btn btn-primary', style: 'justify-self:center', onclick: () => go('new') }, h('span', { class: 'plus', 'aria-hidden': 'true' }, '+'), ' New investigation'));
+    return;
+  }
+  box.replaceChildren(...state.order.slice(0, 6).map((id) => {
+    const r = state.runs.get(id);
+    const s = statusOf(r);
+    return h('button', { type: 'button', class: 'recent-item', 'aria-current': id === state.selected ? 'true' : 'false', onclick: () => select(id) },
+      h('span', { class: `sq${s.live ? ' live' : ''}`, vars: { '--c': s.c } }),
+      h('span', { style: 'min-width:0' }, h('span', { class: 'ri-name', style: 'display:block' }, r.sample_name || '(unnamed sample)'),
+        h('span', { class: 'ri-sub', style: 'display:block' }, `${shortId(id)} \u00b7 ${fmtTime(r.submittedAt)}`)),
+      h('span', { class: 'chip', vars: { '--c': s.c } }, s.label));
+  }));
+}
+
+function renderTable() {
+  const box = $('#runs-table');
+  const sig = state.order.map((id) => { const r = state.runs.get(id); return `${id}:${r.status}:${r.lost}`; }).join(',') + `|${state.selected}`;
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  if (!state.order.length) {
+    box.replaceChildren(emptyState('NO INVESTIGATIONS', 'This session has not started any runs. The server has no list endpoint, so runs from other sessions are not shown.'));
+    return;
+  }
+  const rows = state.order.map((id) => {
+    const r = state.runs.get(id);
+    const tr = h('tr', { 'aria-selected': id === state.selected ? 'true' : 'false', onclick: () => select(id) },
+      h('td', null, statusChip(r)),
+      h('td', null, h('button', { type: 'button', class: 'row-btn', onclick: (e) => { e.stopPropagation(); select(id); } }, r.sample_name || '(unnamed sample)')),
+      h('td', { class: 'cell-mono', title: id }, shortId(id), copyBtn(id, 'Copy investigation ID')),
+      h('td', { class: 'cell-obj', title: r.objective }, r.objective),
+      h('td', { class: 'cell-mono' }, fmtTime(r.submittedAt)));
+    return tr;
+  });
+  box.replaceChildren(h('div', { class: 'table-wrap' },
+    h('table', { class: 'runs' },
+      h('caption', { class: 'sr-only' }, 'Investigations in this session'),
+      h('thead', null, h('tr', null, ...['Status', 'Sample', 'ID', 'Objective', 'Submitted'].map((t) => h('th', { scope: 'col' }, t)))),
+      h('tbody', null, ...rows))));
+}
+
+function evidenceCard(key, value) {
+  const cat = category(key);
+  const interp = INTERP_RE.test(key);
+  const sev = severityOf(value);
+  const isObj = value !== null && typeof value === 'object';
+  const n = isObj ? (Array.isArray(value) ? value.length : Object.keys(value).length) : null;
+  const color = sev && sev.tone !== 'info' ? SEV_COLOR[sev.tone] : cat ? CATEGORY_COLOR[cat] : 'var(--border)';
+  const det = h('details', { class: 'ev-card', vars: { '--c': color }, open: true });
+  det.append(h('summary', null,
+    h('span', { class: 'ev-key' }, key),
+    cat && chip(CATEGORY_LABEL[cat], CATEGORY_COLOR[cat]),
+    interp ? provModel() : h('span', { class: 'prov prov-input', title: 'Structured field returned by the investigator' }, 'RECORDED OUTPUT'),
+    sev && sevChip(sev),
+    n != null && h('span', { class: 'ev-count' }, Array.isArray(value) ? `${n} item${n === 1 ? '' : 's'}` : `${n} field${n === 1 ? '' : 's'}`)));
+  const body = h('div', { class: 'ev-body' });
+  if (typeof value === 'string') {
+    body.append(h('div', { class: 'ev-tools' }, copyBtn(value, `Copy ${key}`)), h('p', { class: 'ev-text' }, value));
+  } else if (isObj) {
+    body.append(h('div', { class: 'ev-tools' }, copyBtn(JSON.stringify(value, null, 2), `Copy ${key} JSON`)), treeView(value, 1));
+  } else {
+    body.append(h('div', { class: 'tree' }, valueEl(value)));
+  }
+  det.append(body);
+  return det;
+}
+function failureBlock(run) {
+  return notice('var(--coral)', 'Investigation failed',
+    h('pre', null, String(run.error || 'No error message reported.')),
+    run.traceback && h('details', null, h('summary', null, 'Server traceback'), h('pre', null, String(run.traceback))),
+    !run.traceback && h('p', { class: 'faint', style: 'margin:8px 0 0;font-size:12px' }, 'The traceback is delivered on the event stream; re-select the run to replay it.'));
+}
+function renderEvidence() {
+  const box = $('#evidence');
+  const run = selRun();
+  const sig = run ? [run.id, run.status, run.lost, run.result ? 'r' : '-', run.error || '', run.traceback ? 't' : '-'].join('|') : 'none';
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  if (!run) { box.replaceChildren(emptyState('NO RUN SELECTED', 'Select a run above to inspect its result.')); return; }
+  const out = [];
+  out.push(h('div', { class: 'ev-status' },
+    statusChip(run),
+    run.status === 'completed' && !run.lost && chip('ANALYSIS COMPLETE', 'var(--ev-done)', { solid: true }),
+    h('span', { class: 'faint mono', style: 'font-size:12px' }, `${run.sample_name} \u00b7 ${shortId(run.id)}`)));
+  if (run.lost) {
+    out.push(notice('var(--text-2)', 'Not on server', 'This run is no longer in server memory. Its files remain under ', h('span', { class: 'mono' }, `runs/ui/${run.id}/`), ' on the host.'));
+    box.replaceChildren(...out); return;
+  }
+  if (run.status === 'failed') out.push(failureBlock(run));
+  const res = run.result;
+  if (res == null) {
+    if (!TERMINAL.has(run.status)) out.push(emptyState('AWAITING RESULT', 'The investigator\u2019s result appears here when the run completes. Live activity streams to the Overview terminal.'));
+    else if (run.status === 'completed') out.push(emptyState('NO RESULT', 'The run completed without returning a result body.'));
+    box.replaceChildren(...out); return;
+  }
+  out.push(h('div', { class: 'legend', 'aria-label': 'Evidence colour key' },
+    chip('PE STRUCTURE', 'var(--ev-pe)'), chip('METADATA', 'var(--ev-meta)'), chip('STRINGS', 'var(--ev-strings)'),
+    chip('REPORTED WARNING', 'var(--ev-warn)'), chip('REPORTED CRITICAL', 'var(--ev-crit)'), chip('COMPLETE', 'var(--ev-done)')));
+  out.push(h('p', { class: 'panel-note', style: 'margin:0 0 16px' },
+    'Categories come from field names. Amber and coral appear only where a record carries its own severity, risk, malicious or suspicious field. MODEL-GENERATED marks fields whose names indicate interpretation (summary, conclusion, reasoning\u2026); check them against the trace.'));
+  const list = h('div', { class: 'ev-list' });
+  if (typeof res !== 'object') list.append(evidenceCard('result', res));
+  else {
+    const entries = Array.isArray(res) ? res.map((v, i) => [`[${i}]`, v]) : Object.entries(res);
+    entries.sort(([a], [b]) => (a === 'metadata' ? -1 : b === 'metadata' ? 1 : 0));
+    for (const [k, v] of entries) list.append(evidenceCard(k, v));
+    if (!entries.length) list.append(emptyState('EMPTY RESULT', 'The result object has no fields.'));
+  }
+  out.push(list);
+  box.replaceChildren(...out);
+}
+
+/* Trace inspector */
+async function loadTrace(force = false) {
+  const run = selRun();
+  if (!run || run.status !== 'completed' || run.lost) { schedule(); return; }
+  const t = state.trace;
+  if (!force && t.id === run.id && (t.status === 'loading' || t.status === 'ready')) return;
+  state.trace = { id: run.id, status: 'loading', data: null, error: null, bytes: 0 };
+  schedule();
+  try {
+    const res = await fetch(`${API}/${encodeURIComponent(run.id)}/trace`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(await errDetail(res));
+    const text = await res.text();
+    const data = JSON.parse(text);
+    if (state.trace.id !== run.id) return;
+    state.trace = { id: run.id, status: 'ready', data, error: null, bytes: new Blob([text]).size };
+  } catch (e) {
+    if (state.trace.id === run.id) state.trace = { id: run.id, status: 'error', data: null, error: e.message || String(e), bytes: 0 };
+  }
+  schedule();
+}
+function findMessageArrays(root) {
+  const out = [];
+  const walk = (v, path, depth) => {
+    if (out.length >= 4 || depth > 3 || v == null || typeof v !== 'object') return;
+    if (Array.isArray(v)) {
+      const withRole = v.filter((x) => x && typeof x === 'object' && typeof x.role === 'string').length;
+      if (v.length && withRole >= v.length / 2) { out.push({ path: path || '(root)', arr: v }); return; }
+      v.slice(0, 40).forEach((x, i) => walk(x, `${path}[${i}]`, depth + 1));
+      return;
+    }
+    for (const [k, x] of Object.entries(v)) walk(x, path ? `${path}.${k}` : k, depth + 1);
+  };
+  walk(root, '', 0);
+  return out;
+}
+function provForRole(role) {
+  const r = role.toLowerCase();
+  if (/assistant|model|ai/.test(r)) return { c: 'var(--purple)', badge: h('span', { class: 'prov prov-model' }, 'MODEL-GENERATED') };
+  if (/tool|function/.test(r)) return { c: 'var(--cyan)', badge: h('span', { class: 'prov prov-observed' }, 'TOOL OUTPUT \u00b7 OBSERVED') };
+  return { c: 'var(--text-3)', badge: h('span', { class: 'prov prov-input' }, 'INPUT') };
+}
+function msgItem(m, i) {
+  if (!m || typeof m !== 'object') return h('div', { class: 'msg' }, h('div', { class: 'tree' }, valueEl(m)));
+  const role = typeof m.role === 'string' ? m.role : '?';
+  const p = provForRole(role);
+  const rest = Object.fromEntries(Object.entries(m).filter(([k]) => k !== 'role' && k !== 'content'));
+  const content = m.content;
+  let body = null;
+  if (typeof content === 'string') {
+    if (content.length > 1600) {
+      const pre = h('p', { class: 'msg-body' }, content.slice(0, 1600) + '\u2026');
+      const btn = h('button', { type: 'button', class: 'more', 'aria-expanded': 'false', onclick: () => {
+        const open = btn.getAttribute('aria-expanded') !== 'true';
+        btn.setAttribute('aria-expanded', String(open));
+        pre.textContent = open ? content : content.slice(0, 1600) + '\u2026';
+        btn.textContent = open ? 'show less' : `show all (${content.length} chars)`;
+      } }, `show all (${content.length} chars)`);
+      body = h('div', null, pre, btn);
+    } else body = h('p', { class: 'msg-body' }, content);
+  } else if (content != null) body = treeView(content, 1);
+  return h('div', { class: 'msg', vars: { '--c': p.c } },
+    h('div', { class: 'msg-hd' }, h('span', { class: 'msg-role' }, role), p.badge, h('span', null, `#${i}`)),
+    body, Object.keys(rest).length ? h('div', { style: 'margin-top:8px' }, treeView(rest, 0)) : null);
+}
+function renderTrace() {
+  const box = $('#trace');
+  const tools = $('#trace-tools');
+  const run = selRun();
+  const t = state.trace;
+  if (state.view === 'trace' && run && run.status === 'completed' && !run.lost && t.id !== run.id) { loadTrace(); return; }
+  const sig = run ? [run.id, run.status, run.lost, t.id, t.status].join('|') : 'none';
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  tools.replaceChildren();
+  if (!run) { box.replaceChildren(emptyState('NO RUN SELECTED', 'Select a completed investigation to inspect its trace.')); return; }
+  if (run.lost) { box.replaceChildren(notice('var(--text-2)', 'Not on server', 'The server no longer has this run in memory, so its trace route is unavailable.')); return; }
+  if (run.status === 'failed') {
+    box.replaceChildren(notice('var(--coral)', 'No trace available',
+      'The trace route is served only for runs that produced a result. This run failed; its streamed events are on disk at ',
+      h('span', { class: 'mono' }, `runs/ui/${run.id}/events.jsonl`), ' and in the Overview terminal.'));
+    return;
+  }
+  if (run.status !== 'completed') {
+    box.replaceChildren(emptyState('NO TRACE YET', 'The investigator writes the trace when the run ends. This page loads it automatically once the run completes.'));
+    return;
+  }
+  if (t.id !== run.id || t.status === 'idle') {
+    box.replaceChildren(h('div', { class: 'empty' }, h('button', { type: 'button', class: 'btn btn-primary', onclick: () => loadTrace(true) }, 'Load trace')));
+    return;
+  }
+  if (t.status === 'loading') { box.replaceChildren(h('div', { class: 'empty', role: 'status' }, h('div', { 'aria-hidden': 'true' }, pixelText('LOADING', 2)), h('span', { class: 'sr-only' }, 'Loading trace'))); return; }
+  if (t.status === 'error') {
+    box.replaceChildren(notice('var(--coral)', 'Could not load trace', h('pre', null, t.error)),
+      h('button', { type: 'button', class: 'btn', style: 'margin-top:12px', vars: { '--c': 'var(--amber)' }, onclick: () => loadTrace(true) }, 'Retry'));
+    return;
+  }
+  const data = t.data;
+  const runId = (run.result && run.result.metadata && run.result.metadata.run_id) || run.id;
+  tools.append(
+    h('button', { type: 'button', class: 'btn btn-sm', vars: { '--c': 'var(--amber)' }, onclick: () => {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = h('a', { href: url, download: `mira-trace-${String(runId).replace(/[^A-Za-z0-9_-]/g, '_')}.json` });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } }, 'Download JSON'),
+    h('button', { type: 'button', class: 'btn btn-sm btn-ghost', vars: { '--c': 'var(--amber)' }, onclick: () => loadTrace(true) }, 'Reload'));
+  const topType = Array.isArray(data) ? `array \u00b7 ${data.length} items` : data && typeof data === 'object' ? `object \u00b7 ${Object.keys(data).length} keys` : typeof data;
+  const out = [h('div', { class: 'trace-bar' },
+    chip('TRACE LOADED', 'var(--ev-done)', { solid: true }),
+    chip(topType, 'var(--amber)'),
+    chip(fmtBytes(t.bytes), 'var(--blue)'),
+    h('span', { class: 'faint mono', style: 'font-size:12px' }, `run ${runId}`))];
+  const convos = findMessageArrays(data);
+  for (const cv of convos) {
+    out.push(h('div', { class: 'section-lbl' }, `Conversation \u00b7 ${cv.path} \u00b7 ${cv.arr.length} messages`));
+    const list = h('div', { class: 'msgs' });
+    renderChunked(list, cv.arr, (m, i) => msgItem(m, i), 60);
+    out.push(list);
+  }
+  if (convos.length) out.push(h('p', { class: 'panel-note', style: 'margin-top:8px' }, 'Roles are read from each message\u2019s own role field: assistant output is model-generated, tool messages carry observed tool output.'));
+  out.push(h('div', { class: 'section-lbl' }, 'Raw trace'));
+  out.push(h('div', { class: 'ev-card', vars: { '--c': 'var(--amber)' } }, h('div', { class: 'ev-body' }, treeView(data, 1))));
+  box.replaceChildren(...out);
+}
+
+/* ==========================================================================
+   Selection, routing, polling
+   ========================================================================== */
+function select(id) {
+  if (!state.runs.has(id)) return;
+  const changed = state.selected !== id;
+  state.selected = id;
+  persist();
+  if (changed || !state.stream || state.stream.id !== id) openStream(id);
+  schedule();
+}
+const VIEWS = ['overview', 'investigations', 'new', 'trace'];
+let userNav = false;
+function go(view) { userNav = true; if (location.hash === `#/${view}`) route(); else location.hash = `#/${view}`; }
+function route() {
+  const m = location.hash.match(/^#\/([a-z]+)/);
+  state.view = m && VIEWS.includes(m[1]) ? m[1] : 'overview';
+  for (const sec of $$('section.view')) sec.hidden = sec.dataset.view !== state.view;
+  for (const b of $$('.nav-btn')) {
+    if (b.dataset.view === state.view) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  }
+  const titles = { overview: 'Overview', investigations: 'Investigations', new: 'New investigation', trace: 'Trace inspector' };
+  document.title = `${titles[state.view]} \u00b7 MIRA // Investigation Console`;
+  if (userNav) {
+    userNav = false;
+    if (state.view === 'new') $('#f-sample').focus(); else $('#main').focus({ preventScroll: true });
+    window.scrollTo(0, 0);
+  }
+  schedule();
+}
+function poll() {
+  for (const run of state.runs.values()) {
+    if (run.lost || TERMINAL.has(run.status)) continue;
+    const streamed = state.stream && state.stream.id === run.id && state.stream.connected;
+    if (!streamed) refresh(run.id);
+  }
+}
+
+/* ==========================================================================
+   New investigation form
+   ========================================================================== */
+function bindForm() {
+  const form = $('#new-form');
+  const input = $('#f-sample');
+  const drop = $('#drop');
+  const fileLbl = $('#drop-file');
+  const err = $('#form-error');
+  const submit = $('#f-submit');
+  $('#drop-art').append(sprite(ICON.artifact, { x: 'var(--magenta)' }, 5));
+
+  const showFile = () => {
+    const f = input.files && input.files[0];
+    drop.classList.toggle('has-file', !!f);
+    fileLbl.textContent = f ? `${f.name} \u00b7 ${fmtBytes(f.size)}` : 'No file selected';
+  };
+  input.addEventListener('change', showFile);
+  ['dragenter', 'dragover'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('dragging'); }));
+  ['dragleave', 'dragend'].forEach((t) => drop.addEventListener(t, () => drop.classList.remove('dragging')));
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault();
+    drop.classList.remove('dragging');
+    if (e.dataTransfer && e.dataTransfer.files.length) { input.files = e.dataTransfer.files; showFile(); }
+  });
+  form.addEventListener('reset', () => setTimeout(showFile, 0));
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.textContent = '';
+    const file = input.files && input.files[0];
+    const objective = $('#f-objective').value.trim();
+    const turns = Number($('#f-turns').value);
+    const tools = Number($('#f-tools').value);
+    if (!file) { err.textContent = 'Choose a sample file.'; input.focus(); return; }
+    if (!objective) { err.textContent = 'Enter an investigation objective.'; $('#f-objective').focus(); return; }
+    if (!Number.isInteger(turns) || turns < 1) { err.textContent = 'Max turns must be a whole number of at least 1.'; $('#f-turns').focus(); return; }
+    if (!Number.isInteger(tools) || tools < 1) { err.textContent = 'Max tool calls must be a whole number of at least 1.'; $('#f-tools').focus(); return; }
+
+    const fd = new FormData();
+    fd.append('sample', file, file.name);
+    fd.append('objective', objective);
+    fd.append('max_turns', String(turns));
+    fd.append('max_tool_calls', String(tools));
+
+    submit.disabled = true;
+    const label = submit.lastChild.textContent;
+    submit.lastChild.textContent = ' Uploading\u2026';
+    try {
+      const res = await fetch(API, { method: 'POST', body: fd });
+      state.api = 'ok';
+      if (!res.ok) throw new Error(await errDetail(res));
+      const rec = await res.json();
+      addRun({ ...rec, submittedAt: Date.now(), limits: { turns, tools } });
+      persist();
+      form.reset();
+      announce(`Investigation started for ${rec.sample_name}`);
+      select(rec.id);
+      go('overview');
+    } catch (ex) {
+      if (ex instanceof TypeError) state.api = 'down';
+      err.textContent = `Could not start: ${ex.message || ex}`;
+    } finally {
+      submit.disabled = false;
+      submit.lastChild.textContent = label;
+      schedule();
+    }
+  });
+}
+
+/* ==========================================================================
+   Boot
+   ========================================================================== */
+function decorate() {
+  $('#logo').append(sprite(ICON.logo, PAL_LOGO, 3));
+  $('#brand-word').append(pixelText('MIRA', 4, ['var(--cyan)', 'var(--purple)']));
+  const tb = $('#tb-title');
+  tb.append(pixelText('MIRA', 2, ['var(--cyan)', 'var(--purple)']));
+  const rest = h('span', { style: 'color: var(--text-2); display:flex' }, pixelText(' // INVESTIGATION CONSOLE', 2));
+  tb.style.display = 'flex';
+  tb.append(rest);
+  for (const el of $$('[data-px]')) {
+    const text = el.textContent.trim();
+    const scale = Number(el.dataset.scale) || 2;
+    el.replaceChildren(h('span', { class: 'sr-only' }, text), pixelText(el.dataset.px, scale));
+  }
+  for (const el of $$('[data-icon]')) el.append(icon(el.dataset.icon, 2));
+  for (const el of $$('[data-cluster]')) el.append(sprite(ICON.cluster, PAL_CLUSTER, 4));
+  $('#instance').replaceChildren(h('span', { class: 'sq', vars: { '--c': 'var(--magenta)' } }), `LOCAL \u00b7 ${location.host || 'file'}`);
+}
+function bindChrome() {
+  for (const b of $$('.nav-btn')) b.addEventListener('click', () => go(b.dataset.view));
+  $('#tb-new').addEventListener('click', () => go('new'));
+  for (const b of $$('[data-filter]')) {
+    if (b.tagName !== 'BUTTON') continue;
+    b.addEventListener('click', () => {
+      $('#term').dataset.filter = b.dataset.filter;
+      for (const o of $$('button[data-filter]')) o.setAttribute('aria-pressed', String(o === b));
+    });
+  }
+  const as = $('#autoscroll');
+  as.addEventListener('click', () => {
+    state.autoscroll = !state.autoscroll;
+    as.setAttribute('aria-pressed', String(state.autoscroll));
+    if (state.autoscroll) { const t = $('#term'); t.scrollTop = t.scrollHeight; }
+  });
+  window.addEventListener('hashchange', route);
+  window.addEventListener('pagehide', closeStream);
+}
+function init() {
+  decorate();
+  bindChrome();
+  bindForm();
+  restore();
+  if (!state.selected && state.order.length) state.selected = state.order[0];
+  route();
+  for (const id of state.order) refresh(id);
+  if (state.selected) openStream(state.selected);
+  setInterval(poll, 3000);
+  schedule();
+}
+init();
+})();
+</script>
+</body>
 </html>
