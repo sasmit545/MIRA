@@ -85,9 +85,9 @@ def revision() -> tuple[str, bool | None]:
         return "unknown", None
 
 
-def unreadable(path: Path, sample: dict) -> str | None:
-    """Why a sample cannot run, or None. Replaces its `sha256` with the file's
-    own hash, so rows count unique files whatever the manifest recorded."""
+def verify_sample(path: Path, sample: dict) -> str | None:
+    """Why a sample cannot run, or None. Records the file's own hash as its
+    `sha256`, so rows count unique files whatever the manifest recorded."""
     if not path.is_file():
         return f"sample not found: {path}"
     recorded = sample["sha256"].lower()
@@ -144,7 +144,7 @@ async def run_manifest(
             if split and sample["split"] != split:
                 continue
             path = sample.pop("path")
-            error = unreadable(path, sample)
+            error = verify_sample(path, sample)
             # A sample that cannot run is one failed row, not one per run.
             for run in range(1 if error else runs):
                 model = model_factory()
@@ -303,7 +303,7 @@ def metrics(files: list[dict]) -> dict:
     }
 
 
-def _rate(k: int, n: int) -> str:
+def format_rate(k: int, n: int) -> str:
     if not n:
         return f"{k}/{n} = n/a"
     low, high = wilson(k, n)
@@ -315,12 +315,12 @@ def _block(title: str, files: list[dict]) -> list[str]:
     confusion = result["confusion"]
     lines = ["", title, "  confusion        " + "  ".join(f"{name.upper()} {count}" for name, count in confusion.items())]
     for name in ("fpr", "precision", "recall"):
-        lines.append(f"  {('benign FPR' if name == 'fpr' else name):<16} {_rate(*result[name])}")
+        lines.append(f"  {('benign FPR' if name == 'fpr' else name):<16} {format_rate(*result[name])}")
     for name in ("f1", "mcc"):
         value = result[name]
         lines.append(f"  {name.upper():<16} {'n/a' if value is None else f'{value:.2f}'}")
     for name in ("abstention", "coverage", "failed_runs", "failed_samples", "consistency"):
-        lines.append(f"  {name.replace('_', ' '):<16} {_rate(*result[name])}")
+        lines.append(f"  {name.replace('_', ' '):<16} {format_rate(*result[name])}")
     for label, verdicts in sorted(result["others"].items()):
         lines.append(f"  {label}: " + ", ".join(f"{verdict} x{count}" for verdict, count in sorted(verdicts.items())))
     return lines

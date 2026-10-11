@@ -13,7 +13,7 @@ its claim, so a report that passes is policy-compliant, not proven right.
 import dataclasses
 from typing import List
 
-from mira.core.evidence import grade
+from mira.core.evidence import Evidence, grade
 
 from ..contracts.finding import Finding, Severity
 from ..contracts.memory import WorkingMemory
@@ -39,7 +39,9 @@ class Outcome:
     record: dict
 
 
-def check(submitted: object, findings: List[Finding], evidence: list, memory: WorkingMemory, *, final: bool) -> Outcome:
+def check(
+    submitted: object, findings: List[Finding], evidence: List[Evidence], memory: WorkingMemory, *, final: bool
+) -> Outcome:
     """Gate one report. On the final report turn a failure downgrades the
     verdict to inconclusive instead of rejecting, since no turn follows (KTD6)."""
     by_id = {item.id: item for item in evidence}

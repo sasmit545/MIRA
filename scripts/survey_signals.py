@@ -23,7 +23,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-from benchmark_static import _rate, read_manifest, unreadable
+from benchmark_static import format_rate, read_manifest, verify_sample
 
 from mira.agents.static.evidence import NORMALIZERS, PRIOR_CAPABILITIES, normalize
 from mira.agents.static.wiring import _configured_yara_rulesets, build_client, build_executor
@@ -126,8 +126,8 @@ def report(samples: list[dict], skipped, refused: list[str]) -> str:
         for label in LABELS:
             count = row[label]
             lines.append(
-                f"  {label:<10} fired {_rate(count['fired'], count['evaluated'])}  "
-                f"failed {count['attempted'] - count['evaluated']}  coverage {_rate(count['evaluated'], count['attempted'])}"
+                f"  {label:<10} fired {format_rate(count['fired'], count['evaluated'])}  "
+                f"failed {count['attempted'] - count['evaluated']}  coverage {format_rate(count['evaluated'], count['attempted'])}"
             )
         lines.append(f"  ceiling    {row['ceiling']}")
     return "\n".join(lines)
@@ -139,7 +139,7 @@ async def survey(manifest: Path, skip=frozenset(), rulesets=()) -> str:
         if entry["split"] == "test":
             continue
         path = entry.pop("path")
-        error = unreadable(path, entry)
+        error = verify_sample(path, entry)
         if error:
             refused.append(f"{path}: {error}")
             continue
