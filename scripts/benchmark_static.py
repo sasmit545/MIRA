@@ -2,6 +2,7 @@
 
     python scripts/benchmark_static.py run samples.csv --split dev --runs 3 --out runs/benchmarks/baseline.jsonl
     python scripts/benchmark_static.py compare runs/benchmarks/baseline.jsonl runs/benchmarks/pipeline.jsonl
+    python scripts/benchmark_static.py score runs/benchmarks/baseline.jsonl
 
 The manifest is a CSV whose first line names its columns, with or without a
 leading `#`: `path` and `label` are required; `sha256`, `label_source`,
@@ -19,6 +20,7 @@ import asyncio
 import csv
 import hashlib
 import json
+import math
 import statistics
 import subprocess
 import time
@@ -28,6 +30,7 @@ from pathlib import Path
 from mira.reasoning.composition import load_env
 from mira.reasoning.main import DEFAULT_OBJECTIVE, investigate
 from mira.reasoning.model.adapter import ModelAdapter
+from mira.reasoning.runtime.trace import trace_path
 
 MANIFEST_COLUMNS = ("path", "label", "sha256", "label_source", "labeled_on", "split", "source", "family", "packed")
 METRICS = (
@@ -115,6 +118,7 @@ async def run_sample(sample: Path, run: int, objective: str, trace_dir: Path, mo
         "seconds": time.perf_counter() - started,
         "verdict": output.verdict,
         "completion_reason": output.completion_reason,
+        "trace": trace_path(trace_dir / f"run{run}", output.metadata["run_id"]),
         "findings": [
             {"title": finding.title, "evidence_refs": [ref.evidence_id for ref in finding.evidence_refs]}
             for finding in output.findings
@@ -226,6 +230,151 @@ def _reasons(rows: list[dict]) -> str:
     return ", ".join(f"{reason} x{count}" for reason, count in reasons.most_common()) or "-"
 
 
+POSITIVE = "malicious"
+DECIDED = ("benign", "malicious")  # any other verdict, such as inconclusive, is an abstention
+STRATA = ("source", "family", "packed")
+Z_95 = 1.959964
+
+
+def unique_files(rows: list[dict]) -> list[dict]:
+    """One entry per file, by SHA-256, with the majority verdict of its
+    successful runs (KTD11). A tie is inconclusive."""
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[row.get("sha256") or row["sample"]].append(row)  # rows older than hashing fall back to the path
+    files = []
+    for key, runs in grouped.items():
+        labels = {row["label"].strip().lower() for row in runs}
+        if len(labels) > 1:
+            raise ValueError(f"{key} is labeled both {' and '.join(sorted(labels))}")
+        ok = [row for row in runs if row.get("ok")]
+        ranked = Counter(row["verdict"].strip().lower() for row in ok).most_common(2)
+        tied = len(ranked) == 2 and ranked[0][1] == ranked[1][1]
+        files.append({
+            "key": key, "label": labels.pop(), "runs": runs, "ok": ok,
+            "majority": None if not ok else "inconclusive" if tied else ranked[0][0],
+            "unanimous": len(ranked) == 1,
+            **{column: runs[0].get(column) or "unlabeled" for column in ("split", *STRATA)},
+        })
+    return files
+
+
+def wilson(k: int, n: int) -> tuple[float, float]:
+    """The Wilson score 95% interval for k of n."""
+    p, z2 = k / n, Z_95 ** 2
+    centre = (p + z2 / (2 * n)) / (1 + z2 / n)
+    half = Z_95 * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)) / (1 + z2 / n)
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
+def metrics(files: list[dict]) -> dict:
+    """Reliability over unique files. Rates are (k, n). A file with no
+    successful run is a failed sample, outside the confusion matrix, and
+    an abstention counts as not malicious, so abstaining on malware costs recall."""
+    scored = [file for file in files if file["ok"] and file["label"] in DECIDED]
+    benign = [file for file in scored if file["label"] == "benign"]
+    malicious = [file for file in scored if file["label"] == POSITIVE]
+    tp = sum(file["majority"] == POSITIVE for file in malicious)
+    fp = sum(file["majority"] == POSITIVE for file in benign)
+    fn, tn = len(malicious) - tp, len(benign) - fp
+    abstained = sum(file["majority"] not in DECIDED for file in scored)
+    answered = [file for file in files if file["ok"]]
+    runs = [row for file in files for row in file["runs"]]
+    mcc_denominator = (tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)
+    others = defaultdict(Counter)
+    for file in answered:
+        if file["label"] not in DECIDED:
+            others[file["label"]][file["majority"]] += 1
+    return {
+        "confusion": {"tp": tp, "fn": fn, "fp": fp, "tn": tn},
+        "fpr": (fp, len(benign)),
+        "precision": (tp, tp + fp),
+        "recall": (tp, len(malicious)),
+        "f1": 2 * tp / (2 * tp + fp + fn) if tp + fp + fn else None,
+        "mcc": (tp * tn - fp * fn) / math.sqrt(mcc_denominator) if mcc_denominator else None,
+        "abstention": (abstained, len(scored)),
+        "coverage": (len(scored) - abstained, len(scored)),
+        "failed_runs": (sum(not row.get("ok") for row in runs), len(runs)),
+        "failed_samples": (len(files) - len(answered), len(files)),
+        "consistency": (sum(file["unanimous"] for file in answered), len(answered)),
+        "others": {label: dict(counts) for label, counts in others.items()},
+    }
+
+
+def _rate(k: int, n: int) -> str:
+    if not n:
+        return f"{k}/{n} = n/a"
+    low, high = wilson(k, n)
+    return f"{k}/{n} = {k / n:.2f} [{low:.2f}, {high:.2f}]"
+
+
+def _block(title: str, files: list[dict]) -> list[str]:
+    result = metrics(files)
+    confusion = result["confusion"]
+    lines = ["", title, "  confusion        " + "  ".join(f"{name.upper()} {count}" for name, count in confusion.items())]
+    for name in ("fpr", "precision", "recall"):
+        lines.append(f"  {('benign FPR' if name == 'fpr' else name):<16} {_rate(*result[name])}")
+    for name in ("f1", "mcc"):
+        value = result[name]
+        lines.append(f"  {name.upper():<16} {'n/a' if value is None else f'{value:.2f}'}")
+    for name in ("abstention", "coverage", "failed_runs", "failed_samples", "consistency"):
+        lines.append(f"  {name.replace('_', ' '):<16} {_rate(*result[name])}")
+    for label, verdicts in sorted(result["others"].items()):
+        lines.append(f"  {label}: " + ", ".join(f"{verdict} x{count}" for verdict, count in sorted(verdicts.items())))
+    return lines
+
+
+def _category(file: dict) -> str | None:
+    if not file["ok"]:
+        return "failed"
+    if file["label"] == "benign" and file["majority"] == POSITIVE:
+        return "false positive"
+    if file["label"] == POSITIVE and file["majority"] not in DECIDED:
+        return "inconclusive malicious"
+    if file["label"] == POSITIVE and file["majority"] != POSITIVE:
+        return "false negative"
+    return None
+
+
+def _review(files: list[dict]) -> list[str]:
+    """Every file a reviewer must assign a failure category to (R4)."""
+    lines = ["", "Review: each false positive, false negative, inconclusive malicious and failed file"]
+    for file in sorted(files, key=lambda file: (file["split"], file["key"])):
+        category = _category(file)
+        if category is None:
+            continue
+        agree = Counter(row["verdict"].strip().lower() for row in file["ok"]).most_common(1)
+        lines.append(
+            f"{category}: {Path(file['runs'][0]['sample']).name}  sha256 {file['key']}  split {file['split']}  "
+            f"label {file['label']}  majority {file['majority'] or 'none'}  "
+            f"({agree[0][1] if agree else 0} of {len(file['ok'])} successful runs agree, {len(file['runs'])} runs)"
+        )
+        for row in file["runs"]:
+            if not row.get("ok"):
+                lines.append(f"  run {row['run']} failed: {row.get('error')}")
+                continue
+            cited = "; ".join(f"{finding['title']} [{', '.join(finding['evidence_refs'])}]" for finding in row["findings"])
+            lines.append(f"  run {row['run']} {row['verdict']}: {cited or 'no findings'}")
+            if row.get("trace"):
+                lines.append(f"    trace {row['trace']}")
+    return lines
+
+
+def score(rows: list[dict]) -> str:
+    """Per split, then per stratum within it where the split holds more than
+    one value, then the review listing."""
+    files = unique_files(rows)
+    lines = ["Reliability over unique files, by majority verdict. Rates are k/n = rate [Wilson 95% interval]."]
+    for split in sorted({file["split"] for file in files}):
+        in_split = [file for file in files if file["split"] == split]
+        lines += _block(f"split {split}", in_split)
+        for stratum in STRATA:
+            values = sorted({file[stratum] for file in in_split})
+            for value in values if len(values) > 1 else ():
+                lines += _block(f"split {split}, {stratum} {value}", [file for file in in_split if file[stratum] == value])
+    return "\n".join(lines + _review(files))
+
+
 def main() -> None:
     load_env()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -240,12 +389,16 @@ def main() -> None:
     versus = commands.add_parser("compare", help="compare a baseline row set with a pipeline row set")
     versus.add_argument("baseline", type=Path)
     versus.add_argument("pipeline", type=Path)
+    scoring = commands.add_parser("score", help="reliability metrics over unique files, and every error to review")
+    scoring.add_argument("rows", type=Path)
     arguments = parser.parse_args()
 
     if arguments.command == "run":
         asyncio.run(run_manifest(
             arguments.manifest, arguments.runs, arguments.objective, arguments.trace_dir, arguments.out, split=arguments.split
         ))
+    elif arguments.command == "score":
+        print(score(load_rows(arguments.rows)))
     else:
         print(compare(load_rows(arguments.baseline), load_rows(arguments.pipeline)))
 
