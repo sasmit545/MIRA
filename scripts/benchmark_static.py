@@ -44,6 +44,8 @@ METRICS = (
     "recalls_requested",
     "repeat_recalls",
     "findings_discarded",
+    "report_rejections",
+    "severities_capped",
 )
 # Paging counters a capability envelope may carry in its metadata.
 COVERAGE_KEYS = ("offset", "limit", "has_more", "total", "fetched", "unfetched", "fetch_error")

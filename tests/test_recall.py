@@ -31,7 +31,8 @@ from mira.reasoning.runtime.trace import (
 )
 
 NOTES = {"understanding": "", "hypotheses": [], "open_questions": [], "candidates": []}
-REPORT = '{"summary": "done", "verdict": "suspicious", "findings": []}'
+# inconclusive: the verdict gate refuses any verdict outside benign, malicious, inconclusive (R8).
+REPORT = '{"summary": "done", "verdict": "inconclusive", "findings": []}'
 URL = "http://evil.example/stage2.bin"
 LATE = 990  # well past the first 4,000 serialized characters
 

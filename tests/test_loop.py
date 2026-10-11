@@ -15,7 +15,8 @@ from mira.reasoning.runtime.loop import AgentLoop
 from mira.reasoning.runtime.tool_runtime import ToolRuntime
 from mira.reasoning.runtime.trace import Tracer
 
-REPORT = '{"summary": "test", "verdict": "test", "findings": []}'
+# inconclusive: the verdict gate refuses any verdict outside benign, malicious, inconclusive (R8).
+REPORT = '{"summary": "test", "verdict": "inconclusive", "findings": []}'
 
 # What a compliant model writes when it has nothing new to say (R9).
 NOTES = {"understanding": "", "hypotheses": [], "open_questions": [], "candidates": []}
@@ -31,7 +32,7 @@ FINDING = {
 
 def report(finding=None, **fields):
     """A submitted report carrying one finding, with fields overridden."""
-    body = {"summary": "test", "verdict": "suspicious", **fields}
+    body = {"summary": "test", "verdict": "inconclusive", **fields}
     if finding is not None:
         body["findings"] = [finding]
     return json.dumps(body)
@@ -640,7 +641,7 @@ async def test_a_refused_rerun_is_counted(tmp_path):
 
 async def test_a_salvaged_report_counts_its_discarded_findings(tmp_path):
     unsupported = {**FINDING, "evidence_refs": ["E99"]}
-    salvaged = json.dumps({"summary": "s", "verdict": "suspicious", "findings": [FINDING, unsupported]})
+    salvaged = json.dumps({"summary": "s", "verdict": "inconclusive", "findings": [FINDING, unsupported]})
     calls, executor = counting_executor()
     loop = build_loop(
         ScriptedModel(ModelResponse(tool_calls=[CALL], memory_update=NOTES), ModelResponse(report=salvaged)),
@@ -922,3 +923,82 @@ async def test_a_yara_scan_inside_its_collected_range_is_refused(tmp_path):
     calls = await run_static(tmp_path, "scan_yara", {"ruleset": "a"}, {"ruleset": "a", "offset": 10}, collected_page("matches"))
 
     assert len(calls) == 1
+
+
+# --- The verdict gate in the loop (KTD6) ---------------------------------
+
+
+def submitted(verdict, *refs, severity="high"):
+    return json.dumps({"summary": "s", "verdict": verdict, "findings": [{**FINDING, "severity": severity, "evidence_refs": list(refs)}]})
+
+
+def graded(id, capability="run_capa", confidence=0.9):
+    return Evidence(id=id, observation=f"observation {id}", source_agent="static", capability=capability, confidence=confidence)
+
+
+async def test_an_uncorroborated_malicious_report_is_rejected_and_a_revised_one_stands(tmp_path):
+    loop, result, _ = await run_loop(
+        tmp_path, ModelResponse(report=submitted("malicious", "E1")), ModelResponse(report=submitted("inconclusive", "E1")),
+        evidence=[graded("E1")],
+    )
+
+    assert result.completion_reason == "reported" and result.verdict == "inconclusive"
+    assert result.metadata["report_rejections"] == 1
+    assert "verdict_gate" not in result.metadata
+
+
+async def test_three_rejected_reports_end_the_run_with_one_report_only_turn(tmp_path):
+    model = ScriptedModel(ModelResponse(report=submitted("malicious", "E1")))
+    loop = build_loop(model, tmp_path)
+
+    result = await loop.run(Objective(description="o"), build_definition(), evidence=[graded("E1")])
+
+    assert result.completion_reason == "limit_reports"
+    assert model.calls == 4  # three rejected, then the final report-only turn
+    assert result.verdict == "inconclusive"
+    assert result.metadata["verdict_gate"]["submitted_verdict"] == "malicious"
+    assert result.metadata["verdict_gate"]["reasons"]
+    assert "Verdict gate" in result.summary
+
+
+async def test_a_final_turn_report_losing_a_finding_and_lacking_corroboration_is_inconclusive(tmp_path):
+    unsupported = {**FINDING, "evidence_refs": ["E99"]}
+    final = json.dumps({"summary": "s", "verdict": "malicious", "findings": [FINDING, unsupported]})
+    calls, executor = counting_executor()
+    loop = build_loop(
+        ScriptedModel(ModelResponse(tool_calls=[CALL], memory_update=NOTES), ModelResponse(report=final)),
+        tmp_path, tools=[PROBE], executor=executor,
+    )
+
+    # One turn, so the report arrives on the final report-only turn.
+    result = await loop.run(
+        Objective(description="o"), build_definition(tools=[PROBE], max_turns=1), evidence=[graded("E1")]
+    )
+
+    assert result.completion_reason == "limit_turns"
+    assert result.metadata["findings_discarded"] == 1
+    assert result.verdict == "inconclusive"
+    assert result.metadata["verdict_gate"]["submitted_verdict"] == "malicious"
+
+
+async def test_a_severity_above_its_cited_grade_is_lowered_and_counted(tmp_path):
+    _, result, _ = await run_loop(
+        tmp_path, ModelResponse(report=submitted("benign", "E1", severity="high")),
+        evidence=[graded("E1", confidence=0.4)],
+    )
+
+    assert result.findings[0].severity is Severity.LOW
+    assert result.metadata["severities_capped"] == 1
+
+
+async def test_every_submitted_report_reaches_the_trace_with_its_validation(tmp_path):
+    loop, result, _ = await run_loop(
+        tmp_path, ModelResponse(report="not json"), ModelResponse(report=submitted("malicious", "E1")),
+        ModelResponse(report=submitted("benign", "E1")),
+        evidence=[graded("E1"), graded("E2", "list_imports")],
+    )
+
+    turns = json.loads((tmp_path / "trace_test.json").read_text())
+    validations = [turn["validation"] for turn in turns if turn.get("validation")]
+    assert [record["outcome"] for record in validations] == ["rejected", "rejected", "accepted"]
+    assert validations[-1]["uncited_strong"] == ["E2"]

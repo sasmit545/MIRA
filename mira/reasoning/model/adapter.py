@@ -14,6 +14,7 @@ from mira.core.hypothesis import PROVISIONAL
 
 from ..contracts.finding import Confidence, Severity
 from ..contracts.model import ModelResponse
+from ..contracts.output import VERDICTS
 from ..contracts.tool import ToolCall
 
 MAX_TOKENS = 16384
@@ -159,7 +160,11 @@ def declarations(tools: List[Any]) -> list[dict]:
                 "type": "object",
                 "properties": {
                     "summary": {"type": "string", "description": "What was found."},
-                    "verdict": {"type": "string", "description": "benign, suspicious, or malicious."},
+                    "verdict": {
+                        "type": "string",
+                        "enum": list(VERDICTS),
+                        "description": "benign, malicious, or inconclusive when the evidence does not settle it.",
+                    },
                     "findings": {
                         "type": "array",
                         "description": "Individual findings supporting the verdict.",

@@ -6,6 +6,9 @@ from .finding import Finding
 from .memory import WorkingMemory
 from .tool import ToolResult
 
+# The only verdicts a report may carry (R8). inconclusive is an answer, not a failure.
+VERDICTS = ("benign", "malicious", "inconclusive")
+
 
 @dataclass(frozen=True)
 class FinalOutput:
@@ -14,7 +17,7 @@ class FinalOutput:
     verdict: str
     findings: List[Finding]
     evidence: List[str]  # Identifiers of the evidence gathered during the run
-    completion_reason: str  # e.g., "reported", "limit_turns", "limit_calls", "degraded"
+    completion_reason: str  # e.g., "reported", "limit_turns", "limit_calls", "limit_reports", "degraded"
     metadata: dict  # turns, tool calls, token usage, run_id
     recommended_actions: List[str] = field(default_factory=list)
     # Raw capability results, for the CLI and for anything else not bound by a

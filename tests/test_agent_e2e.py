@@ -251,7 +251,9 @@ class HighVolumeModel:
             )
         return ModelResponse(report=json.dumps({
             "summary": "The sample embeds many command-and-control URLs.",
-            "verdict": "malicious",
+            # Its strong evidence comes from one capability, so the verdict
+            # gate would refuse malicious (KTD4); this run tests the message.
+            "verdict": "inconclusive",
             "findings": [{
                 "title": "Embedded command-and-control URLs",
                 "description": "The sample carries a large table of beacon URLs.",

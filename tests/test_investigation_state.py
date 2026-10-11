@@ -308,7 +308,7 @@ async def test_a_reported_run_promotes_its_latest_notes(tmp_path):
 async def test_the_assessment_names_hypotheses_unknowns_and_open_questions(tmp_path):
     _, finding = await run_notes(tmp_path, InvestigationState(), *REPORTED)
 
-    assert finding.assessment.startswith("suspicious: done")
+    assert finding.assessment.startswith("inconclusive: done")
     assert "Understanding: Packed, but not plain UPX." in finding.assessment
     assert "- H1 (weakened, 0.20) Packed with UPX. — unknown: whether the stub is custom" in finding.assessment
     assert "- H2 (supported, 0.70) A custom packer." in finding.assessment

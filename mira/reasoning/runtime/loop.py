@@ -13,12 +13,13 @@ from ..contracts.state import State
 from ..contracts.tool import ToolCall, ToolResult, ToolSpec
 from ..definition.agent import AgentDefinition
 from ..model.adapter import ModelAdapter
-from .completion import MAX_MEMORY_REJECTIONS, CompletionChecker
+from .completion import MAX_MEMORY_REJECTIONS, MAX_REPORT_REJECTIONS, CompletionChecker
 from .context import ContextBuilder
 from .narrative import apply_narrative
 from .payload import recall_fingerprint, select
 from .tool_runtime import ToolRuntime
 from .trace import Tracer, capability_calls, covered_range, live_observation
+from .verdict import check
 
 REPORT_TOOL_CALL_ID = "submit_report"
 MEMORY_TOOL_CALL_ID = "record_memory"
@@ -184,15 +185,18 @@ class AgentLoop:
             else:
                 self.completion.record_empty_response()
 
-            report, failure = None, ""
+            report, failure, validation = None, "", None
             if response.report is not None:
-                report, failure = self._parse_report(response.report, state, agent_def)
+                report, failure, validation = self._parse_report(response.report, state, agent_def)
                 if report is None:
                     # Validation failure is an observation the model can recover from.
                     self._record_report_failure(state, response.report, failure)
 
-            if calls or report is None:
-                self.tracer.turn(context_str, response, calls, results, state.snapshot(), token_usage=response.usage)
+            # Every submitted report reaches the trace with the validator's outcome (R13).
+            self.tracer.turn(
+                context_str, response, calls, results, state.snapshot(), token_usage=response.usage,
+                validation=_validation(response.report, validation, failure),
+            )
             if calls:
                 self._notify({"kind": "tool_calls", "turn": state.turn_count + 1, "calls": calls, "results": results, "usage": response.usage})
             if recalled_handles:
@@ -237,6 +241,7 @@ class AgentLoop:
         why = {
             "degraded": f"notes were rejected {MAX_MEMORY_REJECTIONS} times",
             "limit_calls": "the capability-call limit was reached",
+            "limit_reports": f"{MAX_REPORT_REJECTIONS} reports were rejected",
         }.get(reason, "the turn limit was reached")
         state.record_harness_observation(
             ToolCall(tool_call_id=REPORT_TOOL_CALL_ID, name=REPORT_TOOL_CALL_ID, arguments={}),
@@ -250,14 +255,19 @@ class AgentLoop:
         state.recalled = []
         response: ModelResponse = self.model.generate(context=context_str, tools=[], force=REPORT_TOOL_CALL_ID)
         state.record_usage(response.usage)
-        report, failure = None, "no report was submitted on the final turn"
+        report, failure, validation = None, "no report was submitted on the final turn", None
         if response.report is not None:
-            report, failure = self._parse_report(response.report, state, agent_def)
+            # No turn follows, so a verdict the gate refuses becomes inconclusive.
+            report, failure, validation = self._parse_report(response.report, state, agent_def, final=True)
             if report is None:
                 # No turn follows to fix it in, so keep what is supported rather
                 # than lose the whole report to one uncited finding.
-                report = self._supported_part(response.report, state, agent_def)
-        self.tracer.turn(context_str, response, [], [], state.snapshot(), token_usage=response.usage)
+                report, salvaged = self._supported_part(response.report, state, agent_def)
+                validation = salvaged or validation
+        self.tracer.turn(
+            context_str, response, [], [], state.snapshot(), token_usage=response.usage,
+            validation=_validation(response.report, validation, failure),
+        )
         state.turn_count += 1
         if report is None:
             self._notify({"kind": "report_rejected", "turn": state.turn_count, "failure": failure})
@@ -268,24 +278,25 @@ class AgentLoop:
         self._notify({"kind": "report", "turn": state.turn_count, "report": report})
         return report
 
-    def _supported_part(self, raw: str, state: State, agent_def: AgentDefinition) -> Optional[FinalOutput]:
+    def _supported_part(self, raw: str, state: State, agent_def: AgentDefinition) -> tuple[Optional[FinalOutput], Optional[dict]]:
         """The report with every finding that fails validation removed.
 
         Each kept finding passes the same check a normal report does, so an
         unsupported finding never reaches the output. With none left, the
         verdict cannot stand on anything and becomes inconclusive. None when
-        the report is broken for a reason other than its findings.
+        the report is broken for a reason other than its findings. Returned
+        with the gate's record of the salvaged report.
         """
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError:
-            return None
+            return None, None
         if not isinstance(payload, dict) or not isinstance(payload.get("findings"), list):
-            return None
+            return None, None
         kept = [entry for entry in payload["findings"] if _typed_findings([entry], state)[0] is not None]
         dropped = len(payload["findings"]) - len(kept)
         if not dropped:
-            return None
+            return None, None
         state.findings_discarded += dropped
         salvaged = {
             **payload,
@@ -294,8 +305,8 @@ class AgentLoop:
         }
         if not kept:
             salvaged["verdict"] = "inconclusive"
-        report, _ = self._parse_report(json.dumps(salvaged), state, agent_def)
-        return report
+        report, _, validation = self._parse_report(json.dumps(salvaged), state, agent_def, final=True)
+        return report, validation
 
     def _forced_notes(self, state: State, agent_def: AgentDefinition) -> Optional[dict]:
         """Ask once more, offering only record_memory and requiring it. The
@@ -357,6 +368,7 @@ class AgentLoop:
         # A rejected report has always spent capability budget; it is still a
         # harness entry, so it takes no occurrence in the capability history.
         state.tool_call_count += 1
+        self.completion.record_report_rejection()
         state.record_harness_observation(
             call,
             ToolResult(
@@ -371,44 +383,59 @@ class AgentLoop:
         report: str,
         state: State,
         agent_def: AgentDefinition,
-    ) -> tuple[FinalOutput | None, str]:
-        """Validate a submitted report. Returns (output, failure_reason)."""
+        final: bool = False,
+    ) -> tuple[FinalOutput | None, str, Optional[dict]]:
+        """Validate a submitted report: its schema, then the verdict gate.
+
+        Returns (output, failure_reason, the gate's record). On the final
+        report turn a gate failure downgrades the verdict instead (KTD6).
+        """
         try:
             payload = json.loads(report)
         except json.JSONDecodeError as error:
-            return None, f"report must be valid JSON ({error})"
+            return None, f"report must be valid JSON ({error})", None
         if not isinstance(payload, dict):
-            return None, "report must be a JSON object"
+            return None, "report must be a JSON object", None
 
         missing_fields = {"summary", "verdict", "findings"} - payload.keys()
         if missing_fields:
-            return None, f"report is missing required fields: {', '.join(sorted(missing_fields))}"
+            return None, f"report is missing required fields: {', '.join(sorted(missing_fields))}", None
 
         metadata = payload.get("metadata", {})
         if not isinstance(metadata, dict):
-            return None, "report metadata must be an object"
+            return None, "report metadata must be an object", None
 
         findings, failure = _typed_findings(payload["findings"], state)
         if findings is None:
-            return None, failure
+            return None, failure, None
 
         actions, failure = _recommended_actions(payload.get("recommended_actions"))
         if actions is None:
-            return None, failure
+            return None, failure, None
+
+        gate = check(payload["verdict"], findings, state.evidence, state.working_memory, final=final)
+        if gate.failure:
+            return None, gate.failure, gate.record
+        summary, audit = payload["summary"], {"severities_capped": len(gate.record["repairs"])}
+        if gate.record["outcome"] == "downgraded":
+            reasons = gate.record["reasons"]
+            summary = f"{summary} [Verdict gate: {payload['verdict']!r} became inconclusive: {'; '.join(reasons)}.]"
+            audit["verdict_gate"] = {"submitted_verdict": payload["verdict"], "reasons": reasons}
 
         return (
             agent_def.output_contract(
-                summary=payload["summary"],
-                verdict=payload["verdict"],
-                findings=findings,
+                summary=summary,
+                verdict=gate.verdict,
+                findings=gate.findings,
                 evidence=self._evidence(state),
                 completion_reason="reported",
-                metadata={**metadata, **self._metadata(state)},
+                metadata={**metadata, **self._metadata(state), **audit},
                 recommended_actions=actions,
                 observations=self._observations(state),
                 memory=state.working_memory,
             ),
             "",
+            gate.record,
         )
 
     @staticmethod
@@ -424,9 +451,9 @@ class AgentLoop:
             if observation["result"] is not None
         ]
 
-    @staticmethod
-    def _metadata(state: State) -> dict:
+    def _metadata(self, state: State) -> dict:
         return {
+            "report_rejections": self.completion.report_rejections,
             "run_id": state.run_id,
             "turns": state.turn_count,
             "tool_calls": state.tool_call_count,
@@ -445,9 +472,19 @@ class AgentLoop:
             return "degraded"
         if self.completion.memory_rejections >= MAX_MEMORY_REJECTIONS:
             return "degraded"
+        if self.completion.report_rejections >= MAX_REPORT_REJECTIONS:
+            return "limit_reports"
         if state.tool_call_count >= agent_def.max_tool_calls:
             return "limit_calls"
         return "limit_turns"
+
+
+def _validation(raw: Optional[str], record: Optional[dict], failure: str) -> Optional[dict]:
+    """The trace's record of a submitted report: the gate's, or a schema
+    rejection's. None when the turn submitted no report."""
+    if raw is None:
+        return None
+    return record or {"outcome": "rejected", "reasons": [failure]}
 
 
 def _prior_success(state: State, call: ToolCall, spec: Optional[ToolSpec]) -> Optional[str]:

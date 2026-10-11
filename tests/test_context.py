@@ -310,3 +310,12 @@ def test_the_prompt_says_evidence_lines_are_graded_conclusions():
     assert "graded conclusions" in context and "source data" in context
     assert "Low entropy" in context and "not encryption" in context
     assert "capability is not intent" in context
+
+
+def test_the_prompt_states_the_verdict_rules_code_enforces_and_no_other():
+    context = ContextBuilder.build(build_state(), build_definition())
+    stop = context.split("When to stop:")[1].split("Required report schema:")[0]
+
+    assert "benign, malicious or inconclusive" in stop
+    assert "two different capabilities" in stop
+    assert "contradict" not in context.lower()

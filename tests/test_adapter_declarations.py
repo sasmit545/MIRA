@@ -120,3 +120,12 @@ def test_record_memory_bounds_confidence_and_constrains_status():
 
     assert hypothesis["confidence"] == {"type": "number", "minimum": 0, "maximum": 1}
     assert hypothesis["status"]["enum"] == ["open", "supported", "weakened"]
+
+
+def test_the_report_offers_only_the_verdicts_the_gate_accepts():
+    from mira.reasoning.contracts.output import VERDICTS
+
+    verdict = declared_by_name()["submit_report"]["parameters"]["properties"]["verdict"]
+
+    assert verdict["enum"] == list(VERDICTS)
+    assert "suspicious" not in verdict["description"]

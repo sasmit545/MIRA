@@ -17,7 +17,8 @@ from mira.reasoning.runtime.trace import Tracer, resolve_observation, trace_prov
 
 RUN = "memory_run"
 URL = "http://evil.example/stage2.bin"
-REPORT = '{"summary": "done", "verdict": "suspicious", "findings": []}'
+# inconclusive: the verdict gate refuses any verdict outside benign, malicious, inconclusive (R8).
+REPORT = '{"summary": "done", "verdict": "inconclusive", "findings": []}'
 STRINGS = ToolSpec(name="extract_strings", description="Extract strings.", parameters={})
 PACKER = ToolSpec(name="detect_packer", description="Detect packing.", parameters={})
 
@@ -196,7 +197,7 @@ def malformed(n):
     """A capability call that ran (progress, KTD8) with notes that cannot merge."""
     return ModelResponse(tool_calls=[ToolCall(f"m{n}", "extract_strings", {"min_length": n})],
                          memory_update={"hypotheses": "not a list"})
-SALVAGED = '{"summary": "salvaged", "verdict": "suspicious", "findings": []}'
+SALVAGED = '{"summary": "salvaged", "verdict": "inconclusive", "findings": []}'
 
 
 async def test_a_run_ended_by_rejected_notes_still_gets_its_report(tmp_path):
@@ -209,7 +210,7 @@ async def test_a_run_ended_by_rejected_notes_still_gets_its_report(tmp_path):
         ModelResponse(report=SALVAGED),
     )
 
-    assert (result.summary, result.verdict) == ("salvaged", "suspicious")
+    assert (result.summary, result.verdict) == ("salvaged", "inconclusive")
     # Still degraded: the notes lag the results, so nothing will be promoted.
     assert result.completion_reason == "degraded"
     assert "E1" in result.evidence
@@ -407,7 +408,7 @@ def finding(title, refs):
     return {"title": title, "description": "d", "severity": "medium", "confidence": "medium", "evidence_refs": refs}
 
 
-def report_with(*findings, verdict="suspicious"):
+def report_with(*findings, verdict="inconclusive"):
     return ModelResponse(report=json.dumps({"summary": "Final.", "verdict": verdict, "findings": list(findings)}))
 
 
@@ -428,7 +429,7 @@ async def test_the_final_report_keeps_only_supported_findings(tmp_path):
     )))
 
     assert [f.title for f in result.findings] == ["Packed with UPX"]
-    assert result.verdict == "suspicious"
+    assert result.verdict == "inconclusive"
     assert "2 finding(s) without valid evidence references were discarded" in result.summary
     assert result.completion_reason == "limit_turns"
     minted = {item.id for item in state.evidence}

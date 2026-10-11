@@ -297,7 +297,7 @@ class ImportSliceModel:
         refs = ["data.imports.1500"] if turn == 3 else [cited]
         return ModelResponse(report=json.dumps({
             "summary": "Imports a process-injection API late in a large table.",
-            "verdict": "suspicious",
+            "verdict": "inconclusive",
             "findings": [{"title": "Process injection import", "description": "VirtualAllocEx is imported.",
                           "severity": "medium", "confidence": "medium", "evidence_refs": refs}],
         }))

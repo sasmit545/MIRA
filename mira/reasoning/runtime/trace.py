@@ -214,8 +214,10 @@ class Tracer:
         tool_results: List[ToolResult],
         state_snapshot: Dict[str, Any],
         token_usage: Optional[Dict[str, Any]] = None,
+        validation: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Record a single turn."""
+        """Record a single turn. `validation` is the verdict gate's record of
+        a report this turn submitted."""
         turn_record = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "context_sent": context_sent,
@@ -225,6 +227,8 @@ class Tracer:
             "state_snapshot": state_snapshot,
             "token_usage": token_usage,
         }
+        if validation is not None:
+            turn_record["validation"] = validation
         self.trace.append(turn_record)
 
     def save(self) -> str:

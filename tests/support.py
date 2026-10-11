@@ -24,7 +24,8 @@ def build_minimal_pe() -> bytes:
     return head + b"\x00" * (0x400 - len(head)) + b"\x90" * 0x200
 
 
-REPORT = '{"summary": "done", "verdict": "suspicious", "findings": []}'
+# inconclusive: the verdict gate refuses any verdict outside benign, malicious, inconclusive (R8).
+REPORT = '{"summary": "done", "verdict": "inconclusive", "findings": []}'
 # Well-formed and empty: "nothing changed this turn" (R9).
 EMPTY_NOTES = {"understanding": "", "hypotheses": [], "open_questions": [], "candidates": []}
 
