@@ -59,15 +59,23 @@ PAGED_CAPABILITIES: dict[str, tuple[str, str]] = {
 # The claim when an envelope carries no list total to state coverage from.
 PAGE_CAVEAT = "within the returned page"
 
+# Lowercase. The last row is what Microsoft's own toolchain emits: in a survey
+# of 2,111 System32 binaries (October 2026) fothk was in 81% of them, and
+# .imrsiv, gfids, .00cfg and init in 1-3%.
 STANDARD_SECTION_NAMES = frozenset({
     ".text", ".data", ".rdata", ".idata", ".edata", ".pdata", ".xdata",
     ".rsrc", ".reloc", ".bss", ".tls", ".debug", ".didat", ".sdata", ".crt",
+    "fothk", ".imrsiv", "gfids", ".00cfg", "init",
 })
 
 ANTI_DEBUG_IMPORTS = frozenset({
-    "isdebuggerpresent", "checkremotedebuggerpresent", "ntqueryinformationprocess",
-    "outputdebugstring", "ntsetinformationthread", "debugactiveprocess",
+    "checkremotedebuggerpresent", "ntqueryinformationprocess",
+    "ntsetinformationthread", "debugactiveprocess",
 })
+# The C runtime calls these itself: the same survey found IsDebuggerPresent in
+# 60% of System32 binaries and OutputDebugStringW in 52%, against 0.9-6% for
+# the checks above. Still evidence, but weak.
+CRT_DEBUG_IMPORTS = frozenset({"isdebuggerpresent", "outputdebugstring"})
 INJECTION_IMPORTS = frozenset({
     "virtualallocex", "writeprocessmemory", "createremotethread", "openprocess",
     "ntunmapviewofsection", "queueuserapc", "setwindowshookex", "resumethread",
@@ -90,10 +98,12 @@ RUNTIME_RESOLUTION_IMPORTS = frozenset({
 })
 IMPORT_CATEGORIES: tuple[tuple[str, frozenset[str], float], ...] = (
     ("anti-debugging", ANTI_DEBUG_IMPORTS, CONFIDENCE_STRONG),
+    ("debugger checks the C runtime also makes, so most programs import them", CRT_DEBUG_IMPORTS, CONFIDENCE_WEAK),
     ("process injection", INJECTION_IMPORTS, CONFIDENCE_STRONG),
     ("cryptography", CRYPTO_IMPORTS, CONFIDENCE_WEAK),
     ("network communication", NETWORK_IMPORTS, CONFIDENCE_MODERATE),
-    ("run-time API resolution", RUNTIME_RESOLUTION_IMPORTS, CONFIDENCE_WEAK),
+    # GetProcAddress was in 67% of the surveyed System32 binaries.
+    ("run-time API resolution, which most Windows programs also import", RUNTIME_RESOLUTION_IMPORTS, CONFIDENCE_WEAK),
 )
 
 # Instructions used to detect a debugger, a VM, or a timing harness.

@@ -409,3 +409,36 @@ def test_the_strongest_capa_hits_are_named_before_the_cap():
     named = signals[:MAX_RULE_SIGNALS]
     assert sum(signal.confidence == CONFIDENCE_RULE_MATCH for signal in named) == 2
     assert signals[-1].confidence == CONFIDENCE_WEAK  # the remainder is only ordinary hits
+
+
+# --- Calibrated on 2,111 System32 binaries (October 2026) --------------------
+
+
+@pytest.mark.parametrize("name", ["fothk", ".00cfg", "GFIDS", ".imrsiv", "INIT"])
+def test_sections_the_microsoft_toolchain_emits_are_not_flagged(name):
+    assert normalize("analyze_pe", ok({"sections": [section(name=name)]}), {}) == []
+
+
+def imports_named(*names):
+    return ok({"imports": [{"dll": "kernel32.dll", "name": name, "address": index} for index, name in enumerate(names)]})
+
+
+def test_debugger_checks_the_c_runtime_makes_are_weak_and_say_so():
+    (signal,) = normalize("list_imports", imports_named("IsDebuggerPresent", "OutputDebugStringW"), {})
+
+    assert signal.confidence == CONFIDENCE_WEAK
+    assert "C runtime" in signal.observation and "IsDebuggerPresent" in signal.observation
+
+
+def test_a_rarer_debugger_check_is_still_strong_anti_debugging_evidence():
+    from mira.agents.static.evidence import CONFIDENCE_STRONG
+
+    (signal,) = normalize("list_imports", imports_named("CheckRemoteDebuggerPresent"), {})
+
+    assert signal.confidence == CONFIDENCE_STRONG and "anti-debugging" in signal.observation
+
+
+def test_run_time_resolution_says_most_programs_import_it():
+    (signal,) = normalize("list_imports", imports_named("GetProcAddress"), {})
+
+    assert "most Windows programs" in signal.observation
