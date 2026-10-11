@@ -15,8 +15,9 @@ MAX_DIGEST_CHARS = 2000
 MAX_RECALL_CHARS = 6000
 DEFAULT_RECALL_ITEMS = 50
 MAX_RECALL_ITEMS = 200
-RECALL_ARGUMENTS = ("handle", "path", "offset", "limit", "contains", "where", "fields", "group_by")
-ARRAY_ARGUMENTS = RECALL_ARGUMENTS[2:]  # each one selects within an array
+ARRAY_ARGUMENTS = ("offset", "limit", "contains", "where", "fields", "group_by")  # each selects within an array
+RECALL_ARGUMENTS = ("handle", "path", *ARRAY_ARGUMENTS)
+SCALARS = (str, int, float, bool, type(None))  # what a where value may be
 
 # Digest shape: how much of each value survives.
 SCALAR_CHARS = 80
@@ -65,8 +66,8 @@ def digest(output: Any, limit: int = MAX_DIGEST_CHARS) -> str:
 
 def _coverage(output: Any) -> str:
     """The paging counters of the shared result envelope (KTD2), as a line."""
-    metadata = output.get("metadata") if isinstance(output, dict) else None
-    if not isinstance(metadata, dict) or "total" not in metadata:
+    metadata = _metadata(output)
+    if "total" not in metadata:
         return ""
     total, offset = metadata["total"], metadata.get("offset") or 0
     if "fetched" not in metadata:
@@ -75,13 +76,23 @@ def _coverage(output: Any) -> str:
         )
     line = f"coverage: fetched {metadata['fetched']} of {total} (offset {offset})"
     if metadata.get("unfetched"):
-        line += f"; {metadata['unfetched']} not fetched"
-        if "next_offset" in metadata:
-            call = metadata.get("capability") or "the same capability"
-            line += f", the rest with {call}(offset={metadata['next_offset']})"
+        line += f"; {metadata['unfetched']} not fetched" + _rest(metadata)
     if metadata.get("fetch_error"):
         line += f"; fetching stopped: {metadata['fetch_error']}"
     return line
+
+
+def _metadata(output: Any) -> Dict[str, Any]:
+    metadata = output.get("metadata") if isinstance(output, dict) else None
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _rest(metadata: Dict[str, Any]) -> str:
+    """The call that fetches what a collected list left out, when it can."""
+    if "next_offset" not in metadata:
+        return ""
+    call = metadata.get("capability") or "the same capability"
+    return f", fetch the rest with {call}(offset={metadata['next_offset']})"
 
 
 def list_arrays(value: Any, prefix: str = "") -> List[Tuple[str, int]]:
@@ -180,22 +191,23 @@ def select(output: Any, arguments: Dict[str, Any]) -> Selection:
             f"contain any of {query['contains']}" if query["contains"] is not None else "",
         ) if part
     )
+    picked = matched[:query["limit"] or DEFAULT_RECALL_ITEMS]
     if criteria:
         header = f"{where}: {len(matched)} of {len(target) - begin} items from {begin} {criteria}"
     elif query["group_by"]:
         header = f"{where}: {len(matched)} items from {begin}"
     else:
         header = (
-            f"{where}: items {begin}..{begin + min(len(matched), query['limit'] or DEFAULT_RECALL_ITEMS) - 1} of {len(target)}"
-            if matched else f"{where}: no items (it holds {len(target)})"
+            f"{where}: items {begin}..{begin + len(picked) - 1} of {len(target)}"
+            if picked else f"{where}: no items (it holds {len(target)})"
         )
-    header += _unfetched(output)
+    unfetched = _metadata(output).get("unfetched")
+    if unfetched:
+        header += f"; {unfetched} items of this list were never fetched" + _rest(_metadata(output))
 
     if query["group_by"]:
         return Selection(_grouped(header, matched, query["group_by"], query["limit"]), "", path or "")
 
-    limit = query["limit"] or DEFAULT_RECALL_ITEMS
-    picked = matched[:limit]
     fields = query["fields"]
     if fields is not None:
         # Filters above ran over whole items; only the display is narrowed.
@@ -286,27 +298,12 @@ def _equal(value: Any, wanted: Any) -> bool:
     return value == wanted
 
 
-def _unfetched(output: Any) -> str:
-    """Items a collected list never fetched, and the call that fetches them."""
-    metadata = output.get("metadata") if isinstance(output, dict) else None
-    if not isinstance(metadata, dict) or not metadata.get("unfetched"):
-        return ""
-    text = f"; {metadata['unfetched']} items of this list were never fetched"
-    if "next_offset" in metadata:
-        call = metadata.get("capability") or "the same capability"
-        text += f", fetch the rest with {call}(offset={metadata['next_offset']})"
-    return text
-
-
 def _item_address(output: Any, path: Optional[str]) -> Tuple[str, Tuple[int, ...]]:
     """A path ending in an array index shows that one item of its array."""
     parent, _, last = (path or "").rpartition(".")
     if parent and last.isdigit() and isinstance(_resolve(output, parent)[0], list):
         return parent, (int(last),)
     return path or "", ()
-
-
-SCALARS = (str, int, float, bool, type(None))
 
 
 def _recall_arguments(arguments: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:

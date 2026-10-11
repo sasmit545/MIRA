@@ -122,8 +122,12 @@ def _spread(values: list) -> str:
     return f"{shown} ({min(values):g}-{max(values):g})" if len(values) > 1 else shown
 
 
+def _verdicts(rows: list[dict]) -> Counter:
+    return Counter(row["verdict"] for row in rows if row.get("ok"))
+
+
 def _majority(rows: list[dict]) -> str:
-    verdicts = Counter(row["verdict"] for row in rows if row.get("ok"))
+    verdicts = _verdicts(rows)
     if not verdicts:
         return "no run"
     return ", ".join(f"{verdict} x{count}" for verdict, count in verdicts.most_common())
@@ -160,7 +164,7 @@ def compare(baseline: list[dict], pipeline: list[dict]) -> str:
 
 
 def _top(rows: list[dict]):
-    verdicts = Counter(row["verdict"] for row in rows if row.get("ok"))
+    verdicts = _verdicts(rows)
     return verdicts.most_common(1)[0][0] if verdicts else None
 
 
