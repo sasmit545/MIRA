@@ -3,3 +3,5 @@ __pycache__/
 .pytest_cache/
 .venv/
 .env
+# Investigation traces, web console runs and benchmark output: local, and they hold samples
+runs/
