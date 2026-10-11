@@ -237,7 +237,7 @@ async def test_a_repeat_sent_with_new_notes_is_still_progress(tmp_path):
 import re
 from pathlib import Path
 
-from support import PagedImports
+from support import PagedList
 
 from mira.agents.static.wiring import STATIC_ROLE, STATIC_SCOPE, build_evidence_executor, build_executor, tool_manifest
 from mira.reasoning.composition import build_loop, build_tracer
@@ -319,7 +319,7 @@ async def run_slice(tmp_path, client, model):
 
 @pytest.fixture
 async def import_slice(tmp_path):
-    client, model = PagedImports(0, imports=import_rows()), ImportSliceModel()
+    client, model = PagedList(0, imports=import_rows()), ImportSliceModel()
     output, evidence = await run_slice(tmp_path, client, model)
     return output, evidence, client, model, tmp_path
 
@@ -388,7 +388,7 @@ class EmptyTableModel:
 async def test_an_empty_import_table_is_described_and_recalled_as_empty(tmp_path):
     model = EmptyTableModel()
 
-    output, evidence = await run_slice(tmp_path, PagedImports(0), model)
+    output, evidence = await run_slice(tmp_path, PagedList(0), model)
 
     assert evidence == []
     assert "data.imports (0)" in model.contexts[1] and "fetched 0 of 0" in model.contexts[1]

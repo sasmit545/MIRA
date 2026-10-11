@@ -73,12 +73,15 @@ class NoNotesModel:
         return ModelResponse(tool_calls=[call], memory_update=self.notes)
 
 
-class PagedImports:
-    """Serves list_imports pages the way the server does, recording each call."""
+class PagedList:
+    """Serves pages of one list the way the server does, recording each call.
+    The list is imports unless `key` names another capability's list."""
 
-    def __init__(self, count, fail_from=None, raise_from=None, imports=None):
+    def __init__(self, count, fail_from=None, raise_from=None, imports=None, key="imports"):
+        self.key = key
         self.imports = imports if imports is not None else [
             {"dll": "KERNEL32.dll", "name": f"Fn{index}", "ordinal": None, "address": 0x1000 + index}
+            if key == "imports" else {"value": f"{key}-{index}"}
             for index in range(count)
         ]
         self.calls = []
@@ -98,6 +101,6 @@ class PagedImports:
             }
         selected, page = paginate(self.imports, int(parameters.get("limit", 100)), offset)
         return {
-            "status": "ok", "data": {"imports": selected},
+            "status": "ok", "data": {self.key: selected},
             "metadata": {"artifact_id": artifact_id, "capability": capability, "tool_version": "0.1.0", **page},
         }

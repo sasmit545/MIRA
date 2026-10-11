@@ -51,12 +51,15 @@ def test_every_capability_is_declared():
 
 
 def test_a_collected_capability_hides_limit_and_keeps_offset():
+    from mira.agents.static.wiring import COLLECTED_CAPABILITIES
+
     declared = declared_by_name()
 
-    imports = declared["list_imports"]["parameters"]["properties"]
-    assert "limit" not in imports and "offset" in imports
-    assert "whole list" in declared["list_imports"]["description"]
-    assert "limit" in declared["list_exports"]["parameters"]["properties"]
+    for name in COLLECTED_CAPABILITIES:
+        properties = declared[name]["parameters"]["properties"]
+        assert "limit" not in properties and "offset" in properties, name
+        assert "whole list" in declared[name]["description"], name
+    assert "function_address" in declared["disassemble_function"]["parameters"]["required"]
 
 
 def test_the_recall_declaration_instructions_and_select_agree_on_argument_names():

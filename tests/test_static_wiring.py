@@ -159,12 +159,12 @@ class EvidenceExecutorTests(unittest.IsolatedAsyncioTestCase):
 
 import pytest
 
-from support import PagedImports
+from support import PagedList
 
 from mira.agents.static.wiring import COLLECTED_CAPABILITIES, build_executor
 from mira.contracts.capabilities.static.list_imports import ListImportsOutput
 
-IMPORT_CAP = COLLECTED_CAPABILITIES["list_imports"][1]
+IMPORT_CAP = COLLECTED_CAPABILITIES["list_imports"]
 
 
 async def collect(client, **arguments):
@@ -172,7 +172,7 @@ async def collect(client, **arguments):
 
 
 async def test_one_call_collects_every_page():
-    client = PagedImports(2345)
+    client = PagedList(2345)
 
     result = await collect(client)
 
@@ -185,7 +185,7 @@ async def test_one_call_collects_every_page():
 
 
 async def test_a_list_over_the_cap_stops_at_the_cap_and_says_where_the_rest_starts():
-    client = PagedImports(IMPORT_CAP + 250)
+    client = PagedList(IMPORT_CAP + 250)
 
     result = await collect(client)
 
@@ -197,7 +197,7 @@ async def test_a_list_over_the_cap_stops_at_the_cap_and_says_where_the_rest_star
 
 
 async def test_the_model_offset_starts_the_walk():
-    client = PagedImports(2345)
+    client = PagedList(2345)
 
     result = await collect(client, offset=500)
 
@@ -208,8 +208,8 @@ async def test_the_model_offset_starts_the_walk():
 
 
 @pytest.mark.parametrize("client, failure", [
-    (PagedImports(2345, fail_from=1000), "RESOURCE_LIMIT: analysis timed out"),
-    (PagedImports(2345, raise_from=1000), "worker crashed"),
+    (PagedList(2345, fail_from=1000), "RESOURCE_LIMIT: analysis timed out"),
+    (PagedList(2345, raise_from=1000), "worker crashed"),
 ])
 async def test_a_later_page_failure_keeps_the_pages_already_fetched(client, failure):
     result = await collect(client)
@@ -222,7 +222,7 @@ async def test_a_later_page_failure_keeps_the_pages_already_fetched(client, fail
 
 
 async def test_a_first_page_failure_is_the_capability_failure_unchanged():
-    client = PagedImports(10, fail_from=0)
+    client = PagedList(10, fail_from=0)
 
     result = await collect(client)
 
@@ -230,7 +230,7 @@ async def test_a_first_page_failure_is_the_capability_failure_unchanged():
 
 
 async def test_a_model_supplied_artifact_id_and_limit_are_ignored():
-    client = PagedImports(5)
+    client = PagedList(5)
 
     await collect(client, artifact_id="other-sample", limit=2)
 
@@ -239,15 +239,15 @@ async def test_a_model_supplied_artifact_id_and_limit_are_ignored():
 
 
 async def test_an_uncollected_capability_is_passed_through():
-    client = PagedImports(5)
+    client = PagedList(5)
 
-    await build_executor(client, "sample")("list_exports", {"limit": 2})
+    await build_executor(client, "sample")("calculate_entropy", {"offset": 0, "length": 16})
 
-    assert client.calls == [{"artifact_id": "sample", "limit": 2}]
+    assert client.calls == [{"artifact_id": "sample", "offset": 0, "length": 16}]
 
 
 async def test_an_offset_sent_as_text_is_walked_from_the_validated_offset():
-    client = PagedImports(2345)
+    client = PagedList(2345)
 
     result = await collect(client, offset="500")
 
@@ -255,7 +255,7 @@ async def test_an_offset_sent_as_text_is_walked_from_the_validated_offset():
     assert result["metadata"]["fetched"] == 1845
 
 
-class StalledImports(PagedImports):
+class StalledImports(PagedList):
     """Claims more remain but returns nothing past the first page."""
 
     async def invoke(self, capability, artifact_id, **parameters):
@@ -277,8 +277,61 @@ async def test_a_page_that_adds_nothing_ends_the_walk():
 async def test_the_rest_past_a_late_offset_is_counted_from_where_it_starts():
     from mira.reasoning.runtime.payload import digest
 
-    result = await collect(PagedImports(25_000), offset=10_000)
+    result = await collect(PagedList(25_000), offset=10_000)
 
     text = digest(result)
     assert "15000 not fetched" in text  # everything this call does not hold
     assert "the 5000 past it with list_imports(offset=20000)" in text
+
+
+# --- Every paged capability is collected (U10) -------------------------------
+
+from mira.agents.static.evidence import PAGED_CAPABILITIES
+
+NEWLY_COLLECTED = sorted(set(PAGED_CAPABILITIES) - {"list_imports"})
+
+
+def test_every_paged_capability_is_collected():
+    assert set(COLLECTED_CAPABILITIES) == set(PAGED_CAPABILITIES)
+
+
+@pytest.mark.parametrize("capability", NEWLY_COLLECTED)
+async def test_a_collected_capability_merges_its_pages(capability):
+    key = PAGED_CAPABILITIES[capability][0]
+    count = min(COLLECTED_CAPABILITIES[capability], 2345)
+    client = PagedList(count, key=key)
+
+    result = await build_executor(client, "sample")(capability, {})
+
+    metadata = result["metadata"]
+    assert len(result["data"][key]) == count
+    assert (metadata["total"], metadata["fetched"], metadata["unfetched"]) == (count, count, 0)
+    assert len(client.calls) == -(-count // 1000)
+
+
+async def test_capa_with_a_few_findings_is_one_worker_call():
+    client = PagedList(30, key="findings")
+
+    await build_executor(client, "sample")("run_capa", {})
+
+    assert len(client.calls) == 1
+
+
+async def test_strings_past_the_cap_say_how_many_were_not_fetched():
+    from mira.reasoning.runtime.payload import digest
+
+    cap = COLLECTED_CAPABILITIES["extract_strings"]
+    result = await build_executor(PagedList(cap + 2000, key="strings"), "sample")("extract_strings", {"min_length": 6})
+
+    assert result["metadata"]["unfetched"] == 2000
+    assert "2000 not fetched" in digest(result)
+
+
+async def test_a_page_without_paging_counters_is_passed_through():
+    class Unpaged:
+        async def invoke(self, capability, artifact_id, **parameters):
+            return {"status": "ok", "data": {"strings": [{"value": "x"}]}, "metadata": {}}
+
+    result = await build_executor(Unpaged(), "sample")("extract_strings", {})
+
+    assert result["metadata"] == {}

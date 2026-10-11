@@ -873,3 +873,52 @@ def test_new_keys_of_items_already_shown_are_new():
 
     assert names_new and dlls_new and whole_new
     assert not again_new  # whole items already showed every key
+
+
+# --- A call's identity includes its non-paging arguments (U10) ---------------
+
+
+async def run_static(tmp_path, name, first, second, output):
+    from mira.agents.static.wiring import tool_manifest
+
+    spec = next(spec for spec in tool_manifest() if spec.name == name)
+    calls = []
+
+    def executor(name, arguments):
+        calls.append(arguments)
+        return output
+
+    model = ScriptedModel(
+        ModelResponse(tool_calls=[ToolCall("1", name, first)], memory_update=NOTES),
+        ModelResponse(tool_calls=[ToolCall("2", name, second)], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+    loop = build_loop(model, tmp_path, tools=[spec], executor=executor)
+    await loop.run(Objective(description="o"), build_definition(tools=[spec]))
+    return calls
+
+
+def collected_page(key, count=40):
+    return {"status": "ok", "data": {key: [{"value": index} for index in range(count)]},
+            "metadata": {"offset": 0, "total": count, "fetched": count, "unfetched": 0, "has_more": False}}
+
+
+async def test_a_yara_scan_with_another_ruleset_is_a_separate_call(tmp_path):
+    calls = await run_static(tmp_path, "scan_yara", {"ruleset": "a"}, {"ruleset": "b", "offset": 10}, collected_page("matches"))
+
+    assert len(calls) == 2
+
+
+async def test_disassembly_at_another_address_is_a_separate_call(tmp_path):
+    calls = await run_static(
+        tmp_path, "disassemble_function", {"function_address": 4096}, {"function_address": 8192, "offset": 10},
+        collected_page("instructions"),
+    )
+
+    assert len(calls) == 2
+
+
+async def test_a_yara_scan_inside_its_collected_range_is_refused(tmp_path):
+    calls = await run_static(tmp_path, "scan_yara", {"ruleset": "a"}, {"ruleset": "a", "offset": 10}, collected_page("matches"))
+
+    assert len(calls) == 1

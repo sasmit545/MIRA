@@ -6,7 +6,7 @@ is *named* in the sentence, not that a particular sentence was written.
 
 import pytest
 
-from support import PagedImports, ToolThenReportModel
+from support import PagedList, ToolThenReportModel
 
 from mira.agents.static.agent import StaticAgent
 from mira.agents.static.evidence import (
@@ -278,7 +278,7 @@ async def test_collected_evidence_resolves_to_the_collected_call(tmp_path):
     objective = InvestigationObjective(
         name="Assess imports", description="d", reason="test", capabilities=("list_imports",)
     )
-    agent = StaticAgent(PagedImports(0, imports=imports), model=ToolThenReportModel("list_imports"), trace_dir=tmp_path)
+    agent = StaticAgent(PagedList(0, imports=imports), model=ToolThenReportModel("list_imports"), trace_dir=tmp_path)
     state = InvestigationState()
 
     await agent.investigate(objective, "sample-1", state=state)

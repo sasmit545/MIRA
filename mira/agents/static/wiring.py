@@ -13,7 +13,7 @@ from collections import Counter
 from functools import lru_cache
 from pathlib import Path
 
-from mira.agents.static.evidence import normalize
+from mira.agents.static.evidence import PAGED_CAPABILITIES, normalize
 from mira.core.artifact import ArtifactStore
 from mira.core.evidence import Evidence
 from mira.core.state import InvestigationState
@@ -33,10 +33,21 @@ STATIC_SCOPE = (
     "so tool arguments never need to name it."
 )
 
-# Capabilities one call collects whole (KTD1): the data key holding the list,
-# and the item cap that bounds the walk (KTD3). The cap is a tuning knob,
-# calibrated from the benchmark like the thresholds in evidence.py.
-COLLECTED_CAPABILITIES = {"list_imports": ("imports", 10_000)}
+# Capabilities one call collects whole (KTD1), with the item cap that bounds
+# the walk (KTD3); each list lives under its PAGED_CAPABILITIES key. Tuning
+# knobs, like the thresholds in evidence.py. Calibrated on notepad.exe: 3,608
+# strings at under a second a page, a 4,643-instruction disassembly window at
+# about 2 s a page, and 35 capa findings in one 84 s call. Capa's lower cap
+# keeps that worker to two calls at most.
+COLLECTED_CAPABILITIES = {
+    "list_imports": 10_000,
+    "list_exports": 10_000,
+    "extract_strings": 10_000,
+    "scan_yara": 10_000,
+    "run_capa": 2_000,
+    "list_functions": 10_000,
+    "disassemble_function": 10_000,
+}
 PAGE_SIZE = 1000  # the MCP input contracts' page bound (le=1000)
 
 
@@ -58,7 +69,7 @@ def _spec(definition) -> ToolSpec:
     parameters = definition.input_schema
     if definition.name not in COLLECTED_CAPABILITIES:
         return ToolSpec(name=definition.name, description=definition.description, parameters=parameters)
-    cap = COLLECTED_CAPABILITIES[definition.name][1]
+    cap = COLLECTED_CAPABILITIES[definition.name]
     parameters = {
         **parameters,
         "properties": {name: value for name, value in parameters["properties"].items() if name != "limit"},
@@ -183,11 +194,12 @@ async def _collect(client: StaticMCPClient, capability: str, artifact_id: str, p
     A failure after the first page keeps what was fetched and names itself in
     `fetch_error` (R3); a first-page failure is the capability's own.
     """
-    key, cap = COLLECTED_CAPABILITIES[capability]
+    key, cap = PAGED_CAPABILITIES[capability][0], COLLECTED_CAPABILITIES[capability]
     parameters.pop("limit", None)
     start = parameters.pop("offset", 0)
     first = await client.invoke(capability, artifact_id=artifact_id, **parameters, offset=start, limit=min(PAGE_SIZE, cap))
-    if first.get("status") != "ok":
+    if first.get("status") != "ok" or "total" not in (first.get("metadata") or {}):
+        # A page without counters cannot be walked or described: pass it on as is.
         return first
     # Walk on from the offset the server validated: the model may send "500".
     start = first["metadata"].get("offset", start)
