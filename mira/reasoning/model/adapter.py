@@ -1,4 +1,4 @@
-"""Model provider adapter for Azure AI Foundry, spoken over the OpenAI SDK.
+"""Model provider adapter for any OpenAI-compatible endpoint, spoken over the OpenAI SDK.
 
 The only file that touches the provider SDK.
 """
@@ -6,6 +6,7 @@ The only file that touches the provider SDK.
 import json
 import os
 from typing import Any, List, Optional
+from urllib.parse import urlparse
 
 from openai import OpenAI
 
@@ -15,8 +16,6 @@ from ..contracts.finding import Confidence, Severity
 from ..contracts.model import ModelResponse
 from ..contracts.tool import ToolCall
 
-BASE_URL = "https://testingrpmtpm.services.ai.azure.com/openai/v1"
-DEFAULT_MODEL = "grok-4.6"
 MAX_TOKENS = 16384
 
 REPORT_TOOL = "submit_report"
@@ -25,15 +24,18 @@ RECALL_TOOL = "recall_observation"  # rides tool_calls; the loop intercepts it b
 
 
 class ModelAdapter:
-    """Adapter for the Azure-hosted Grok deployment."""
+    """Adapter for the deployment that MODEL_BASE_URL and MODEL_NAME name."""
 
     def __init__(self, api_key: Optional[str] = None):
         if api_key is None:
             api_key = os.getenv("MODEL_API_KEY")
         if not api_key:
             raise ValueError("MODEL_API_KEY environment variable is not set")
-        self.model_name = os.getenv("MODEL_NAME", DEFAULT_MODEL)
-        self.client = OpenAI(base_url=BASE_URL, api_key=api_key)
+        # No defaults: a missing setting must not silently reach a stale deployment.
+        base_url = _required("MODEL_BASE_URL")
+        self.model_name = _required("MODEL_NAME")
+        self.endpoint_host = urlparse(base_url).hostname or base_url
+        self.client = OpenAI(base_url=base_url, api_key=api_key)
 
     def generate(self, context: str, tools: List[Any], force: Optional[str] = None) -> ModelResponse:
         """Ask the model for its next move as a native tool call.
@@ -342,6 +344,13 @@ def _recall_declaration() -> dict:
             "required": ["handle"],
         },
     }
+
+
+def _required(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise ValueError(f"{name} environment variable is not set")
+    return value
 
 
 def _usage(usage: Any) -> Optional[dict]:

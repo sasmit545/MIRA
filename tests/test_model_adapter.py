@@ -1,10 +1,50 @@
 """Token usage should ride along with every ModelResponse shape the adapter returns."""
 
 import json
+import os
 import unittest
 from types import SimpleNamespace
+from unittest import mock
+
+import pytest
 
 from mira.reasoning.model.adapter import ModelAdapter
+
+ENDPOINT = {
+    "MODEL_API_KEY": "key",
+    "MODEL_BASE_URL": "https://models.example.test/openai/v1",
+    "MODEL_NAME": "some-model",
+}
+
+
+def test_the_endpoint_and_model_come_from_the_environment():
+    with mock.patch.dict(os.environ, ENDPOINT, clear=True):
+        adapter = ModelAdapter()
+
+    assert str(adapter.client.base_url).rstrip("/") == ENDPOINT["MODEL_BASE_URL"]
+    assert adapter.model_name == "some-model"
+    assert adapter.endpoint_host == "models.example.test"
+
+
+@pytest.mark.parametrize("missing", ["MODEL_BASE_URL", "MODEL_NAME"])
+def test_a_missing_endpoint_setting_fails_by_name(missing):
+    settings = {name: value for name, value in ENDPOINT.items() if name != missing}
+    with mock.patch.dict(os.environ, settings, clear=True), pytest.raises(ValueError, match=missing):
+        ModelAdapter()
+
+
+async def test_a_scripted_model_needs_no_endpoint_settings(tmp_path):
+    """build_loop constructs the real adapter only when no model is given."""
+    from mira.reasoning.main import investigate
+    from tests.support import ToolThenReportModel, build_minimal_pe
+
+    sample = tmp_path / "sample.exe"
+    sample.write_bytes(build_minimal_pe())
+    unset = {name: value for name, value in os.environ.items() if not name.startswith("MODEL_")}
+    with mock.patch.dict(os.environ, unset, clear=True):
+        output = await investigate(sample, "objective", trace_dir=tmp_path, model=ToolThenReportModel())
+
+    assert output.completion_reason == "reported"
 
 
 def _fake_response(*, tool_calls=None, content=None):
