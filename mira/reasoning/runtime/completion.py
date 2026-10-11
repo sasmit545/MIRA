@@ -18,6 +18,10 @@ class CompletionChecker:
 
     def __init__(self):
         self.consecutive_empty_responses = 0
+        # Responses with nothing in them at all. Empty responses also count
+        # turns that did nothing new, such as a loop of repeated recalls, whose
+        # model is still talking and can still be asked for its report.
+        self.consecutive_silent_responses = 0
         self.memory_rejections = 0
         self.report_rejections = 0
 
@@ -51,9 +55,10 @@ class CompletionChecker:
         # If none of the termination conditions are met, continue.
         return True
 
-    def record_empty_response(self) -> None:
-        """Call this when the model returns an empty response."""
+    def record_empty_response(self, silent: bool = False) -> None:
+        """Call this when a turn made no progress; `silent` when the model said nothing."""
         self.consecutive_empty_responses += 1
+        self.consecutive_silent_responses = self.consecutive_silent_responses + 1 if silent else 0
 
     def record_memory_rejection(self) -> None:
         """Call this when a narrative is rejected."""
@@ -65,3 +70,4 @@ class CompletionChecker:
     def record_non_empty_response(self) -> None:
         """Call this when the model returns a non-empty response (tool calls or report)."""
         self.consecutive_empty_responses = 0
+        self.consecutive_silent_responses = 0

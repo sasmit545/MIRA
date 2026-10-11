@@ -309,7 +309,8 @@ async def test_a_model_that_only_rereads_is_stopped_after_two_repeats(tmp_path):
     )
 
     assert loop.completion.memory_rejections == 0  # a repeat owes no notes
-    assert len(model.contexts) == 4  # no report-only turn: the model went quiet
+    # It was still calling tools, not silent, so the run ends with one report-only turn.
+    assert len(model.contexts) == 5
     assert result.completion_reason == "degraded"
 
 

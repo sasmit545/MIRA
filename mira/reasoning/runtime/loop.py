@@ -100,7 +100,7 @@ class AgentLoop:
             state.record_usage(response.usage)
 
             if response.report is None and not response.tool_calls and response.memory_update is None:
-                self.completion.record_empty_response()
+                self.completion.record_empty_response(silent=True)
                 self.tracer.turn(context_str, response, [], [], state.snapshot(), token_usage=response.usage)
                 self._notify({"kind": "empty", "turn": state.turn_count + 1})
                 state.turn_count += 1
@@ -214,9 +214,11 @@ class AgentLoop:
             state.turn_count += 1
 
         # Any limit gets one report-only turn, except a model that has gone
-        # silent: asking it once more would only spend another call.
+        # silent: asking it once more would only spend another call. A model
+        # that loops on repeats is still talking, and the run it paid for
+        # should end in a report, not in the stock message below.
         reason = self._completion_reason(state, agent_def)
-        if self.completion.consecutive_empty_responses < 2:
+        if self.completion.consecutive_silent_responses < 2:
             salvaged = await self._final_report_turn(state, agent_def, reason)
             if salvaged is not None:
                 return salvaged
@@ -526,7 +528,8 @@ def _recall(state: State, arguments: dict) -> Tuple[str, bool]:
         state.repeat_recalls += 1
         return (
             f"recall_observation({asked}): already answered on turn {state.recall_fingerprints[fingerprint]}; "
-            "not repeated. What it showed belongs in your notes; ask for something else."
+            "not repeated. What it showed belongs in your notes; ask for something else, "
+            "or submit your report if you have enough."
         ), False
     handle = arguments.get("handle")
     if not isinstance(handle, str) or not handle:

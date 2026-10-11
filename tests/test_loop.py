@@ -471,17 +471,23 @@ async def test_closing_by_identifier_removes_an_entry(tmp_path):
     assert memory.hypotheses == []
 
 
-def test_closing_an_unknown_identifier_is_rejected():
+def test_closing_an_unknown_identifier_is_dropped_and_the_rest_of_the_notes_kept():
+    """Like an unknown evidence id: a live run lost a whole notes update, and
+    then the run, to one close of a question it never created."""
     from mira.reasoning.contracts.memory import WorkingMemory
     from mira.reasoning.runtime.narrative import apply_narrative
 
     memory = WorkingMemory()
     assert apply_narrative(memory, notes(hypotheses=[hypothesis()]), []) == ("", [])
 
-    failure, _ = apply_narrative(memory, notes(close=["H9"]), [])
+    failure, warnings = apply_narrative(
+        memory, notes(understanding="packed?", hypotheses=[hypothesis("H2")], close=["H9", "H1"]), []
+    )
 
-    assert "H9" in failure
-    assert [h.id for h in memory.hypotheses] == ["H1"]
+    assert failure == ""
+    assert any("H9" in warning for warning in warnings)
+    assert [h.id for h in memory.hypotheses] == ["H2"]  # H1 was closed, H9 never existed
+    assert memory.understanding == "packed?"
 
 
 class RecordingModel(ScriptedModel):
@@ -739,7 +745,23 @@ async def test_a_model_that_only_repeats_a_recall_ends_degraded_after_two_turns(
     )
 
     assert result.completion_reason == "degraded"
-    assert result.metadata["turns"] == 4
+    # A model looping on recalls is not silent, so it still gets the report-only
+    # turn (its scripted last response has no report, hence no report here).
+    assert result.metadata["turns"] == 5
+
+
+async def test_a_looping_model_that_is_still_talking_gets_a_final_report_turn(tmp_path):
+    loop_turn = ModelResponse(tool_calls=[recall_imports(limit=5)], memory_update=NOTES)
+    _, result, _ = await run_imports(
+        tmp_path,
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        loop_turn,  # turn 2 shows the slice; turns 3 and 4 repeat it, and the run degrades
+        loop_turn, loop_turn,
+        ModelResponse(report=REPORT),
+    )
+
+    assert result.completion_reason == "degraded"
+    assert result.summary == "test"  # the report-only turn's report, not the stock "stopped" message
 
 
 def test_a_recall_of_items_already_shown_is_served_but_is_not_progress():

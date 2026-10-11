@@ -204,7 +204,7 @@ async def test_a_model_that_only_repeats_a_call_ends_degraded_not_at_max_turns(t
     )
 
     assert client.calls == ["file_info"]  # the repeats were refused, never run
-    assert model.turns == 3
+    assert model.turns == 4  # three turns, then the report-only turn a still-talking model gets
     assert finding.assessment.startswith("inconclusive:")
 
 
@@ -217,7 +217,7 @@ async def test_a_repeat_with_unchanged_notes_is_not_progress(tmp_path):
         objective, "sample-1"
     )
 
-    assert model.turns == 3
+    assert model.turns == 4  # three turns plus the report-only turn
 
 
 async def test_a_repeat_sent_with_new_notes_is_still_progress(tmp_path):

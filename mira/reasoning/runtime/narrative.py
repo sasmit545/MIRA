@@ -21,7 +21,8 @@ def apply_narrative(memory: WorkingMemory, update: Any, known_evidence: Collecti
 
     Additive: an entry the update does not mention stands, a mentioned entry
     is revised by id, and removing one means naming its id in `close`. An
-    unknown evidence id is dropped rather than rejecting the whole update.
+    unknown evidence id, or an unknown id in `close`, is dropped rather than
+    rejecting the whole update.
     """
     if not isinstance(update, dict):
         return "record_memory must be an object", []
@@ -50,7 +51,9 @@ def apply_narrative(memory: WorkingMemory, update: Any, known_evidence: Collecti
     present = {entry.id for entries in (hypotheses, questions, candidates) for entry in entries}
     unknown = [item for item in closing if item not in present]
     if unknown:
-        return f"close names entries that do not exist: {', '.join(unknown)}", []
+        # Dropped, not fatal, like an unknown evidence id: closing something
+        # that is already gone leaves the notes where the model wanted them.
+        warnings.append(f"close named entries that do not exist: {', '.join(unknown)}")
 
     memory.understanding = understanding or memory.understanding
     memory.hypotheses = [item for item in hypotheses if item.id not in closing]
