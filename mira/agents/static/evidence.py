@@ -96,14 +96,17 @@ NETWORK_IMPORTS = frozenset({
 RUNTIME_RESOLUTION_IMPORTS = frozenset({
     "loadlibrary", "loadlibraryex", "getprocaddress", "ldrloaddll", "ldrgetprocedureaddress",
 })
-IMPORT_CATEGORIES: tuple[tuple[str, frozenset[str], float], ...] = (
-    ("anti-debugging", ANTI_DEBUG_IMPORTS, CONFIDENCE_STRONG),
-    ("debugger checks the C runtime also makes, so most programs import them", CRT_DEBUG_IMPORTS, CONFIDENCE_WEAK),
-    ("process injection", INJECTION_IMPORTS, CONFIDENCE_STRONG),
-    ("cryptography", CRYPTO_IMPORTS, CONFIDENCE_WEAK),
-    ("network communication", NETWORK_IMPORTS, CONFIDENCE_MODERATE),
+# (rule key, label, vocabulary, confidence)
+IMPORT_CATEGORIES: tuple[tuple[str, str, frozenset[str], float], ...] = (
+    ("anti-debugging", "anti-debugging", ANTI_DEBUG_IMPORTS, CONFIDENCE_STRONG),
+    ("crt-debugger-checks", "debugger checks the C runtime also makes, so most programs import them",
+     CRT_DEBUG_IMPORTS, CONFIDENCE_WEAK),
+    ("process-injection", "process injection", INJECTION_IMPORTS, CONFIDENCE_STRONG),
+    ("cryptography", "cryptography", CRYPTO_IMPORTS, CONFIDENCE_WEAK),
+    ("network", "network communication", NETWORK_IMPORTS, CONFIDENCE_MODERATE),
     # GetProcAddress was in 67% of the surveyed System32 binaries.
-    ("run-time API resolution, which most Windows programs also import", RUNTIME_RESOLUTION_IMPORTS, CONFIDENCE_WEAK),
+    ("runtime-resolution", "run-time API resolution, which most Windows programs also import",
+     RUNTIME_RESOLUTION_IMPORTS, CONFIDENCE_WEAK),
 )
 
 # Instructions used to detect a debugger, a VM, or a timing harness.
@@ -133,11 +136,14 @@ class Signal(NamedTuple):
     """One readable observation and how strongly the result supports it.
 
     The identifier, capability, and provenance are attached by the specialist,
-    which is the one place that sees every result in order (KTD1).
+    which is the one place that sees every result in order (KTD1). `rule` is a
+    stable key per evidence rule, such as `strings:URL`, so the signal survey
+    can count firing rates; it never reaches Evidence or the prompt.
     """
 
     observation: str
     confidence: float
+    rule: str
 
 
 def normalize(capability: str, result: dict, prior: dict[str, dict]) -> list[Signal]:
@@ -186,12 +192,14 @@ def _analyze_pe(data: dict, prior: dict[str, dict], coverage: str) -> list[Signa
                 f"Section {name!r} has entropy {entropy:.2f}, at or above the "
                 f"{PACKED_SECTION_ENTROPY} threshold that suggests packed or encrypted content.",
                 _entropy_confidence(entropy, PACKED_SECTION_ENTROPY),
+                "section:high-entropy",
             ))
         if name.lower() not in STANDARD_SECTION_NAMES:
             signals.append(Signal(
                 f"Section {name!r} is not one of the section names a standard "
                 f"toolchain emits, which packers and manual PE authors often produce.",
                 CONFIDENCE_MODERATE,
+                "section:nonstandard-name",
             ))
     return signals
 
@@ -207,6 +215,7 @@ def _detect_packer(data: dict, prior: dict[str, dict], coverage: str) -> list[Si
         # The detector scored its own match; that is a measurement of the
         # signal, not a model's self-report, so it is usable as-is.
         float(data.get("confidence") or CONFIDENCE_MODERATE),
+        "packer:detected",
     )]
 
 
@@ -214,13 +223,14 @@ def _list_imports(data: dict, prior: dict[str, dict], coverage: str) -> list[Sig
     imports = data.get("imports") or []
     names = [entry.get("name") for entry in imports if entry.get("name")]
     signals = []
-    for label, vocabulary, confidence in IMPORT_CATEGORIES:
+    for rule, label, vocabulary, confidence in IMPORT_CATEGORIES:
         matched = [name for name in names if _is_known(name, vocabulary)]
         if matched:
             signals.append(Signal(
                 f"Imports associated with {label} appear {coverage}: "
                 f"{_examples(matched)}.",
                 confidence,
+                f"imports:{rule}",
             ))
     nameless = len(imports) - len(names)
     if nameless:
@@ -229,6 +239,7 @@ def _list_imports(data: dict, prior: dict[str, dict], coverage: str) -> list[Sig
             f"{nameless} of {len(imports)} imports {coverage} have no name and are imported by "
             f"ordinal only, which hides which functions the program uses.",
             CONFIDENCE_WEAK,
+            "imports:ordinal-only",
         ))
     return signals
 
@@ -244,12 +255,14 @@ def _list_exports(data: dict, prior: dict[str, dict], coverage: str) -> list[Sig
             f"{len(unnamed)} of {len(exports)} exports {coverage} are reachable only "
             f"by ordinal, which hides their purpose from static inspection.",
             _fraction_confidence(len(unnamed), len(exports)),
+            "exports:ordinal-only",
         ))
     if _is_pe_without_dll_flag(prior):
         signals.append(Signal(
             f"The file exports {len(exports)} symbols {coverage} although its PE header "
             f"does not set the DLL characteristic.",
             CONFIDENCE_MODERATE,
+            "exports:not-a-dll",
         ))
     return signals
 
@@ -263,6 +276,7 @@ def _extract_strings(data: dict, prior: dict[str, dict], coverage: str) -> list[
             signals.append(Signal(
                 f"Strings containing a {label} appear {coverage}: {_examples(matched)}.",
                 confidence,
+                f"strings:{label}",
             ))
     return signals
 
@@ -275,6 +289,7 @@ def _calculate_entropy(data: dict, prior: dict[str, dict], coverage: str) -> lis
             f"The {data.get('length') or 0} bytes at offset {data.get('offset') or 0} have entropy {entropy:.2f}, "
             f"at or above the {HIGH_REGION_ENTROPY} threshold that suggests compressed or encrypted content.",
             _entropy_confidence(entropy, HIGH_REGION_ENTROPY),
+            "entropy:high-region",
         ))
     # A packed stub can hide inside a region whose average looks ordinary.
     chunks = data.get("chunks") or []
@@ -284,6 +299,7 @@ def _calculate_entropy(data: dict, prior: dict[str, dict], coverage: str) -> lis
             f"{len(high)} of {len(chunks)} windows have entropy at or above the {HIGH_REGION_ENTROPY} "
             f"threshold, at offsets {_examples([chunk.get('offset') for chunk in high])}.",
             _entropy_confidence(max(chunk["entropy"] for chunk in high), HIGH_REGION_ENTROPY),
+            "entropy:high-window",
         ))
     return signals
 
@@ -299,8 +315,9 @@ def _scan_yara(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal
             f"{match.get('namespace') or '(default)'!r} matched this artifact{suffix} "
             f"({coverage}).",
             CONFIDENCE_RULE_MATCH,
+            f"yara:{match.get('namespace') or 'default'}/{match.get('rule')}",
         ))
-    return signals + _remainder(len(matches), "YARA rules matched", coverage)
+    return signals + _remainder(len(matches), "YARA rules matched", coverage, "yara:remainder")
 
 
 def _run_capa(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
@@ -318,9 +335,12 @@ def _run_capa(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]
             f"capa identified the capability {finding.get('rule_id')!r} "
             f"({namespace}) in this artifact ({coverage}){ordinary}.",
             confidence,
+            f"capa:{finding.get('rule_id')}",
         ))
     rest = graded[MAX_RULE_SIGNALS:]
-    return signals + _remainder(len(graded), "capa capabilities were identified", coverage, rest[0][0] if rest else CONFIDENCE_WEAK)
+    return signals + _remainder(
+        len(graded), "capa capabilities were identified", coverage, "capa:remainder", rest[0][0] if rest else CONFIDENCE_WEAK
+    )
 
 
 def _capa_confidence(namespace: str | None) -> float:
@@ -351,6 +371,7 @@ def _list_functions(data: dict, prior: dict[str, dict], coverage: str) -> list[S
         f"far below the density a normally compiled binary shows; code may be packed, "
         f"obfuscated, or generated at runtime.",
         CONFIDENCE_MODERATE,
+        "functions:low-density",
     )]
 
 
@@ -366,6 +387,7 @@ def _disassemble_function(data: dict, prior: dict[str, dict], coverage: str) -> 
         f"The function at {data.get('function_address')} uses instructions associated with "
         f"anti-analysis checks {coverage}: {', '.join(matched)}.",
         CONFIDENCE_MODERATE,
+        "disassembly:anti-analysis-instructions",
     )]
 
 
@@ -377,6 +399,7 @@ def _file_info(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal
             f"Whole-file entropy is {entropy:.2f}, at or above the {HIGH_REGION_ENTROPY} "
             f"threshold that suggests the bulk of the file is compressed or encrypted.",
             _entropy_confidence(entropy, HIGH_REGION_ENTROPY),
+            "file:high-entropy",
         ))
     if data.get("file_type") == "unknown":
         # ponytail: the plan's intended signal here is a declared type that
@@ -387,9 +410,17 @@ def _file_info(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal
             "The file's type could not be identified from its header, so the "
             "format-specific capabilities cannot be applied to it.",
             CONFIDENCE_WEAK,
+            "file:unknown-type",
         ))
     return signals
 
+
+# The earlier results each normalizer reads as `prior`. The signal survey
+# counts a rule as evaluated on a sample only when these succeeded too.
+PRIOR_CAPABILITIES: dict[str, tuple[str, ...]] = {
+    "list_exports": ("analyze_pe",),
+    "list_functions": ("file_info",),
+}
 
 NORMALIZERS: dict[str, Callable[[dict, dict[str, dict], str], list[Signal]]] = {
     "analyze_pe": _analyze_pe,
@@ -428,7 +459,7 @@ def _is_known(name: str, vocabulary: frozenset[str]) -> bool:
     )
 
 
-def _remainder(total: int, what: str, coverage: str, confidence: float = CONFIDENCE_RULE_MATCH) -> list[Signal]:
+def _remainder(total: int, what: str, coverage: str, rule: str, confidence: float = CONFIDENCE_RULE_MATCH) -> list[Signal]:
     """Account for rule hits past the cap, so the count is never lost."""
     if total <= MAX_RULE_SIGNALS:
         return []
@@ -436,6 +467,7 @@ def _remainder(total: int, what: str, coverage: str, confidence: float = CONFIDE
         f"A further {total - MAX_RULE_SIGNALS} {what} {coverage}, beyond the "
         f"{MAX_RULE_SIGNALS} named individually; the full list is in the run trace.",
         confidence,
+        rule,
     )]
 
 

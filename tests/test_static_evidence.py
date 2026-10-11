@@ -442,3 +442,65 @@ def test_run_time_resolution_says_most_programs_import_it():
     (signal,) = normalize("list_imports", imports_named("GetProcAddress"), {})
 
     assert "most Windows programs" in signal.observation
+
+
+# --- Rule keys for the signal survey (KTD9) ----------------------------------
+
+
+@pytest.mark.parametrize("capability,result,_expected,_clean", SIGNALS)
+def test_every_signal_names_a_stable_rule(capability, result, _expected, _clean):
+    first, second = normalize(capability, result, PRIOR), normalize(capability, result, PRIOR)
+
+    assert first
+    for signal in first:
+        assert ":" in signal.rule and signal.rule.split(":", 1)[1]
+    assert [signal.rule for signal in first] == [signal.rule for signal in second]
+
+
+def test_different_categories_get_different_rules():
+    imports = normalize("list_imports", imports_result(["IsDebuggerPresent", "VirtualAllocEx", "GetProcAddress", None]), {})
+    strings = normalize("extract_strings", ok({"strings": [
+        {"value": "http://a.example/x"}, {"value": "HKLM\Software\Run"}, {"value": "10.0.0.1"},
+    ]}), {})
+    sections = normalize("analyze_pe", ok({"sections": [section(name="UPX0", entropy=7.9)]}), {})
+    capa_hits = normalize("run_capa", capa("anti-analysis/anti-vm", "anti-analysis/anti-vm"), PRIOR)
+
+    for signals, count in ((imports, 4), (strings, 3), (sections, 2), (capa_hits, 2)):
+        assert len({signal.rule for signal in signals}) == count
+    assert {"strings:URL", "section:high-entropy", "section:nonstandard-name"} <= {
+        signal.rule for signal in strings + sections
+    }
+    assert {signal.rule for signal in capa_hits} == {"capa:rule 0", "capa:rule 1"}
+
+
+def test_a_yara_rule_is_keyed_by_namespace_and_rule():
+    (signal,) = normalize("scan_yara", ok({"matches": [{"rule": "Emotet_Loader", "namespace": "default", "tags": []}]}), PRIOR)
+
+    assert signal.rule == "yara:default/Emotet_Loader"
+
+
+def test_hits_past_the_cap_share_one_remainder_rule():
+    result = ok({"matches": [{"rule": f"Rule_{n}", "namespace": "n", "tags": []} for n in range(30)]})
+
+    assert normalize("scan_yara", result, PRIOR)[-1].rule == "yara:remainder"
+
+
+# --- One definition of each grade (KTD1) -------------------------------------
+
+
+@pytest.mark.parametrize("confidence, expected", [
+    (0.4, "weak"), (0.59, "weak"), (0.6, "moderate"), (0.79, "moderate"), (0.8, "strong"), (1.0, "strong"),
+])
+def test_confidence_bands(confidence, expected):
+    from mira.core.evidence import grade
+
+    assert grade(confidence) == expected
+
+
+def test_static_confidence_constants_fall_in_the_band_their_names_imply():
+    from mira.agents.static.evidence import BASE_CONFIDENCE, CONFIDENCE_STRONG
+    from mira.core.evidence import grade
+
+    assert grade(CONFIDENCE_STRONG) == grade(CONFIDENCE_RULE_MATCH) == "strong"
+    assert grade(CONFIDENCE_MODERATE) == "moderate"
+    assert grade(CONFIDENCE_WEAK) == grade(BASE_CONFIDENCE) == "weak"

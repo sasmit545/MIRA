@@ -7,6 +7,20 @@ from typing import List, Optional
 from datetime import datetime
 from .artifact import Artifact
 
+# What each grade of Evidence.confidence means, for every specialist and the
+# reasoning loop: below MODERATE_FROM is weak, from STRONG_FROM is strong.
+MODERATE_FROM = 0.6
+STRONG_FROM = 0.8
+
+
+def grade(confidence: float) -> str:
+    """weak, moderate or strong."""
+    if confidence >= STRONG_FROM:
+        return "strong"
+    if confidence >= MODERATE_FROM:
+        return "moderate"
+    return "weak"
+
 
 class Evidence:
     def __init__(
