@@ -286,3 +286,27 @@ def test_the_history_shows_which_items_recalls_have_shown():
     context = ContextBuilder.build(state, build_definition())
 
     assert "shown data.imports: 0..49, 400..411 (62 of 412)" in context
+
+
+def test_each_evidence_line_names_its_grade_and_never_the_number():
+    state = build_state()
+    for index, (capability, confidence) in enumerate([("extract_strings", 0.4), ("list_imports", 0.6), ("run_capa", 0.9)]):
+        state.add_evidence(Evidence(
+            id=f"E{index + 1}", observation=f"observation {index + 1}", source_agent="static",
+            capability=capability, confidence=confidence,
+        ))
+
+    context = ContextBuilder.build(state, build_definition())
+
+    assert "E1 [extract_strings, weak] observation 1" in context
+    assert "E2 [list_imports, moderate] observation 2" in context
+    assert "E3 [run_capa, strong] observation 3" in context
+    assert "0.9" not in context and "0.4" not in context
+
+
+def test_the_prompt_says_evidence_lines_are_graded_conclusions():
+    context = ContextBuilder.build(build_state(), build_definition())
+
+    assert "graded conclusions" in context and "source data" in context
+    assert "Low entropy" in context and "not encryption" in context
+    assert "capability is not intent" in context

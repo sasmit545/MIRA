@@ -5,6 +5,8 @@ This is the only place model-facing text is assembled.
 
 from typing import Any
 
+from mira.core.evidence import grade
+
 from ..contracts.state import State
 from ..definition.instructions import assemble_instructions
 from .payload import MAX_OBSERVATION_CHARS, truncate  # noqa: F401 - re-exported
@@ -76,9 +78,11 @@ def render_state(state: State) -> str:
         # it has to be shown them.
         lines.append("")
         lines.append("Evidence gathered so far (cite these identifiers in your findings):")
+        # The grade word, not the number: the model must know which items the
+        # verdict rules count, and a number invites false precision (KTD8).
         for evidence in state.evidence:
             lines.append(
-                f"  {evidence.id} [{evidence.capability}] {evidence.observation}"
+                f"  {evidence.id} [{evidence.capability}, {grade(evidence.confidence)}] {evidence.observation}"
             )
 
     if state.findings:

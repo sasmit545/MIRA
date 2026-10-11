@@ -263,7 +263,8 @@ def import_rows(count=2000):
 
 
 def injection_id(context):
-    found = re.search(r"^\s+(E\d+) \[list_imports\] Imports associated with process injection", context, re.MULTILINE)
+    # Each evidence line names its grade after the capability (KTD8).
+    found = re.search(r"^\s+(E\d+) \[list_imports, strong\] Imports associated with process injection", context, re.MULTILINE)
     return found.group(1) if found else None
 
 
