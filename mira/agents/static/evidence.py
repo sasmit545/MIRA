@@ -31,6 +31,14 @@ MAX_EXAMPLES = 5  # keep an observation a sentence, not a dump of a page
 MAX_RULE_SIGNALS = 20
 
 CONFIDENCE_RULE_MATCH = 0.9  # a curated rule fired on this sample
+
+# capa-rules' top-level namespaces whose hits suggest intent rather than
+# ordinary capability. Everything else (file, registry, process handling and
+# the like) is what any program does, so it stays evidence but weak.
+CAPA_INTENT_NAMESPACES = frozenset({"anti-analysis", "persistence", "impact", "malware-family"})
+CAPA_SENSITIVE_NAMESPACES = frozenset({"communication", "collection", "targeting"})
+
+ENTRY_POINT_DISCOVERY = "pe_entry_point"  # list_functions' discovery_source for the entry point
 CONFIDENCE_STRONG = 0.8
 CONFIDENCE_MODERATE = 0.6
 CONFIDENCE_WEAK = 0.4  # a pattern that also occurs in benign software
@@ -286,20 +294,42 @@ def _scan_yara(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal
 
 
 def _run_capa(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
-    findings = data.get("findings") or []
+    # Strongest first, so the cap names what matters; sorted() keeps capa's
+    # order within a grade.
+    graded = sorted(
+        ((_capa_confidence(finding.get("namespace")), finding) for finding in data.get("findings") or []),
+        key=lambda pair: -pair[0],
+    )
     signals = []
-    for finding in findings[:MAX_RULE_SIGNALS]:
+    for confidence, finding in graded[:MAX_RULE_SIGNALS]:
         namespace = finding.get("namespace") or "(uncategorized)"
+        ordinary = "; benign software commonly has this capability too" if confidence == CONFIDENCE_WEAK else ""
         signals.append(Signal(
             f"capa identified the capability {finding.get('rule_id')!r} "
-            f"({namespace}) in this artifact ({coverage}).",
-            CONFIDENCE_RULE_MATCH,
+            f"({namespace}) in this artifact ({coverage}){ordinary}.",
+            confidence,
         ))
-    return signals + _remainder(len(findings), "capa capabilities were identified", coverage)
+    rest = graded[MAX_RULE_SIGNALS:]
+    return signals + _remainder(len(graded), "capa capabilities were identified", coverage, rest[0][0] if rest else CONFIDENCE_WEAK)
+
+
+def _capa_confidence(namespace: str | None) -> float:
+    """capa says what code can do, and most of it ordinary programs do too.
+    Graded by the namespace's top level (capa-rules' own categories)."""
+    top = (namespace or "").split("/")[0]
+    if top in CAPA_INTENT_NAMESPACES:
+        return CONFIDENCE_RULE_MATCH
+    if top in CAPA_SENSITIVE_NAMESPACES:
+        return CONFIDENCE_MODERATE
+    return CONFIDENCE_WEAK
 
 
 def _list_functions(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]:
     functions = data.get("functions") or []
+    if all(function.get("discovery_source") == ENTRY_POINT_DISCOVERY for function in functions):
+        # A pass that only reads the entry point finds one function in any
+        # file; that is its limitation, and it measures no density.
+        return []
     size = _reported_size(prior)
     if size < MIN_SIZE_FOR_DENSITY:
         return []
@@ -388,14 +418,14 @@ def _is_known(name: str, vocabulary: frozenset[str]) -> bool:
     )
 
 
-def _remainder(total: int, what: str, coverage: str) -> list[Signal]:
+def _remainder(total: int, what: str, coverage: str, confidence: float = CONFIDENCE_RULE_MATCH) -> list[Signal]:
     """Account for rule hits past the cap, so the count is never lost."""
     if total <= MAX_RULE_SIGNALS:
         return []
     return [Signal(
         f"A further {total - MAX_RULE_SIGNALS} {what} {coverage}, beyond the "
         f"{MAX_RULE_SIGNALS} named individually; the full list is in the run trace.",
-        CONFIDENCE_RULE_MATCH,
+        confidence,
     )]
 
 

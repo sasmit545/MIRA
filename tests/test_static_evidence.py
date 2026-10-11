@@ -358,3 +358,54 @@ def test_high_entropy_windows_are_one_observation_with_their_offsets():
 
 def test_windows_and_region_below_the_threshold_are_silent():
     assert normalize("calculate_entropy", windows(), {}) == []
+
+
+# --- False positives on a genuine Windows binary -----------------------------
+
+from mira.agents.static.evidence import CONFIDENCE_MODERATE, CONFIDENCE_RULE_MATCH
+
+
+def test_entry_point_only_discovery_says_nothing_about_function_density():
+    """The capability only reads the PE entry point, so one function in a
+    large file is its limitation, not a sign of packing."""
+    result = ok({"functions": [{"address": 1, "size": None, "name": "entry_point", "discovery_source": "pe_entry_point"}],
+                 "limitations": "Only the PE entry point is discovered without an analysis engine."})
+
+    assert normalize("list_functions", result, PRIOR) == []
+
+
+def capa(*namespaces):
+    return ok({"findings": [{"rule_id": f"rule {index}", "namespace": namespace, "meta": {}}
+                            for index, namespace in enumerate(namespaces)]})
+
+
+@pytest.mark.parametrize("namespace, confidence", [
+    ("anti-analysis/anti-debugging/debugger-detection", CONFIDENCE_RULE_MATCH),
+    ("persistence/registry/run", CONFIDENCE_RULE_MATCH),
+    ("collection/keylog", CONFIDENCE_MODERATE),
+    ("host-interaction/file-system/delete", CONFIDENCE_WEAK),
+    (None, CONFIDENCE_WEAK),
+])
+def test_a_capa_hit_is_graded_by_its_namespace(namespace, confidence):
+    (signal,) = normalize("run_capa", capa(namespace), PRIOR)
+
+    assert signal.confidence == confidence
+
+
+def test_an_ordinary_capability_says_benign_software_has_it_too():
+    (weak,) = normalize("run_capa", capa("host-interaction/file-system/delete"), PRIOR)
+    (strong,) = normalize("run_capa", capa("anti-analysis/anti-vm"), PRIOR)
+
+    assert "benign software" in weak.observation
+    assert "benign software" not in strong.observation
+
+
+def test_the_strongest_capa_hits_are_named_before_the_cap():
+    ordinary = ["host-interaction/file-system"] * (MAX_RULE_SIGNALS + 5)
+    result = capa(*ordinary, "anti-analysis/anti-debugging", "impact/wipe-disk")
+
+    signals = normalize("run_capa", result, PRIOR)
+
+    named = signals[:MAX_RULE_SIGNALS]
+    assert sum(signal.confidence == CONFIDENCE_RULE_MATCH for signal in named) == 2
+    assert signals[-1].confidence == CONFIDENCE_WEAK  # the remainder is only ordinary hits
