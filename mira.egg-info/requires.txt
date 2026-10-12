@@ -1,4 +1,7 @@
+openai>=1.40
 fastmcp==2.14.3
+fastapi>=0.115
+python-multipart>=0.0.9
 pefile==2024.8.26
 capstone==5.0.6
 yara-python==4.5.4

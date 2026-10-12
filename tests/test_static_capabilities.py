@@ -45,6 +45,31 @@ class FileInfoTests(unittest.TestCase):
         self.assertEqual(len(result["data"]["strings"]), 2)
         self.assertTrue(result["metadata"]["has_more"])
 
+    def test_strings_are_found_once_across_window_boundaries(self):
+        from unittest import mock
+
+        from mira.capabilities.static import string_analyzer
+
+        data = b"\x00" * 990 + b"SPANNING-STRING" + b"\x00" * 2000 + b"A\x00B\x00C\x00D\x00E\x00" + b"\x00" * 40
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.bin"
+            artifact_path.write_bytes(data)
+            artifact = ArtifactStore(temporary_directory).register("sample-w", artifact_path)
+
+            whole = extract_strings(artifact, limit=100)
+            with mock.patch.object(string_analyzer, "WINDOW", 1000), mock.patch.object(string_analyzer, "OVERLAP", 100):
+                windowed = extract_strings(artifact, limit=100)
+            with mock.patch.object(string_analyzer, "MAX_SCAN_SIZE", 10):
+                refused = extract_strings(artifact)
+
+        self.assertEqual(windowed["data"], whole["data"])
+        self.assertEqual(
+            [(s["value"], s["offset"]) for s in windowed["data"]["strings"]],
+            [("SPANNING-STRING", 990), ("ABCDE", 3005)],
+        )
+        self.assertEqual(refused["status"], "error")
+        self.assertEqual(refused["error"]["code"], "RESOURCE_LIMIT")
+
     def test_every_page_reports_the_whole_list_size(self):
         from mira.capabilities.static.common import paginate
 
