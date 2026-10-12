@@ -45,6 +45,38 @@ class FileInfoTests(unittest.TestCase):
         self.assertEqual(len(result["data"]["strings"]), 2)
         self.assertTrue(result["metadata"]["has_more"])
 
+    def test_strings_are_found_once_across_window_boundaries(self):
+        from unittest import mock
+
+        from mira.capabilities.static import string_analyzer
+
+        data = b"\x00" * 990 + b"SPANNING-STRING" + b"\x00" * 2000 + b"A\x00B\x00C\x00D\x00E\x00" + b"\x00" * 40
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.bin"
+            artifact_path.write_bytes(data)
+            artifact = ArtifactStore(temporary_directory).register("sample-w", artifact_path)
+
+            whole = extract_strings(artifact, limit=100)
+            with mock.patch.object(string_analyzer, "WINDOW", 1000), mock.patch.object(string_analyzer, "OVERLAP", 100):
+                windowed = extract_strings(artifact, limit=100)
+            with mock.patch.object(string_analyzer, "MAX_SCAN_SIZE", 10):
+                refused = extract_strings(artifact)
+
+        self.assertEqual(windowed["data"], whole["data"])
+        self.assertEqual(
+            [(s["value"], s["offset"]) for s in windowed["data"]["strings"]],
+            [("SPANNING-STRING", 990), ("ABCDE", 3005)],
+        )
+        self.assertEqual(refused["status"], "error")
+        self.assertEqual(refused["error"]["code"], "RESOURCE_LIMIT")
+
+    def test_every_page_reports_the_whole_list_size(self):
+        from mira.capabilities.static.common import paginate
+
+        pages = [paginate(list(range(250)), limit=100, offset=offset)[1] for offset in (0, 100, 200)]
+
+        self.assertEqual([page["total"] for page in pages], [250, 250, 250])
+
 
 class PESupportTests(unittest.TestCase):
     def test_a_pe_handler_does_not_hold_the_sample_open(self):
@@ -78,6 +110,39 @@ class EntropyTests(unittest.TestCase):
         self.assertEqual(chunks[0]["entropy"], 0.0)
         self.assertGreater(chunks[-1]["entropy"], 0.0)
         self.assertEqual(sum(chunk["length"] for chunk in chunks), 8 + 512)
+
+    def test_an_over_cap_chunk_request_is_rejected_naming_the_smallest_valid_size(self):
+        from mira.capabilities.static.entropy_analyzer import MAX_ENTROPY_CHUNKS
+
+        size = 4 * 1024 * 1024
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.bin"
+            artifact_path.write_bytes(b"\x00" * size)
+            artifact = ArtifactStore(temporary_directory).register("sample-5", artifact_path)
+
+            result = calculate_entropy(artifact, offset=0, length=size, chunk_size=1)
+
+        self.assertEqual(result["error"]["code"], "INVALID_INPUT")
+        self.assertIn(f"chunk_size of at least {-(-size // MAX_ENTROPY_CHUNKS)}", result["error"]["message"])
+
+    def test_a_request_at_the_chunk_cap_succeeds(self):
+        from mira.capabilities.static.entropy_analyzer import MAX_ENTROPY_CHUNKS
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = Path(temporary_directory) / "sample.bin"
+            artifact_path.write_bytes(bytes(range(256)) * MAX_ENTROPY_CHUNKS)
+            artifact = ArtifactStore(temporary_directory).register("sample-6", artifact_path)
+
+            result = calculate_entropy(artifact, offset=0, length=4 * MAX_ENTROPY_CHUNKS, chunk_size=4)
+
+        self.assertEqual(len(result["data"]["chunks"]), MAX_ENTROPY_CHUNKS)
+
+    def test_the_contract_states_the_chunk_cap(self):
+        from mira.capabilities.static.entropy_analyzer import MAX_ENTROPY_CHUNKS
+        from mira.contracts.capabilities.static.entropy import CalculateEntropyInput
+
+        description = CalculateEntropyInput.model_fields["chunk_size"].description
+        self.assertIn(str(MAX_ENTROPY_CHUNKS), description)
 
     def test_chunk_size_without_a_region_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -170,6 +235,7 @@ class CapaAnalyzerTests(unittest.IsolatedAsyncioTestCase):
                 "    authors: [test@example.com]\n"
                 "    scopes: {static: file, dynamic: file}\n"
                 "    examples: ['0000000000000000000000000000000000000000000000000000000000000000:0x0']\n"
+                "    att&ck: ['Defense Evasion::Obfuscated Files or Information [T1027]']\n"
                 "  features:\n"
                 '    - string: "MIRA-TEST-MARKER"\n'
             )
@@ -182,6 +248,13 @@ class CapaAnalyzerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["rule_id"], "contains marker string")
         self.assertEqual(findings[0]["namespace"], "example")
+        # Compact: ids only, and none of the rule's authoring metadata.
+        self.assertEqual(findings[0]["attack"], ["T1027"])
+        self.assertEqual(set(findings[0]), {"rule_id", "namespace", "attack", "mbc", "matches"})
+        detail = result["data"]["details"][0]
+        self.assertEqual(detail["rule_id"], "contains marker string")
+        self.assertEqual(detail["attack"], ["Defense Evasion::Obfuscated Files or Information [T1027]"])
+        self.assertNotIn("authors", detail)
 
 
 class CapaResourceTests(unittest.TestCase):
@@ -338,3 +411,60 @@ class LargeResultTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "ok", result.get("error"))
         self.assertEqual(len(result["data"]["strings"]), 1000)
         self.assertGreater(len(json.dumps(result).encode()), 64 * 1024)
+
+
+def test_an_unknown_yara_ruleset_names_real_ones():
+    """A guessed name ('default') must come back with names that exist."""
+    from mira.capabilities.static.yara_scanner import scan_yara
+    from mira.core.artifact import Artifact
+
+    artifact = Artifact(artifact_id="a", path=Path("unused"), file_type="pe", size=0, sha256="0" * 64)
+    rulesets = {name: Path(f"{name}.yar") for name in ("apt_apt10", "crime_emotet", "gen_webshells")}
+
+    near = scan_yara(artifact, ruleset="gen_webshell", rulesets=rulesets)
+    far = scan_yara(artifact, ruleset="default", rulesets=rulesets)
+
+    assert near["error"]["code"] == "INVALID_INPUT"
+    assert "closest configured: gen_webshells" in near["error"]["message"]
+    assert "3 are configured" in far["error"]["message"]
+    assert "apt, crime, gen" in far["error"]["message"]
+
+
+def test_the_default_yara_scan_runs_every_ruleset_and_names_each_match_s_ruleset(tmp_path):
+    """A model guessing ruleset names one per turn spent a whole live run on it."""
+    from mira.capabilities.static.yara_scanner import scan_yara
+    from mira.core.artifact import Artifact
+
+    sample = tmp_path / "sample.exe"
+    sample.write_bytes(b"MZ" + b"\0" * 62)
+    rulesets = {}
+    for name in ("apt_one", "crime_two"):
+        rulesets[name] = tmp_path / f"{name}.yar"
+        rulesets[name].write_text(f"rule {name}_hit {{ condition: uint16(0) == 0x5A4D }}")
+    artifact = Artifact(artifact_id="a", path=sample, file_type="pe", size=64, sha256="0" * 64)
+
+    result = scan_yara(artifact, rulesets=rulesets)
+
+    assert result["status"] == "ok", result.get("error")
+    assert {(match["namespace"], match["rule"]) for match in result["data"]["matches"]} == {
+        ("apt_one", "apt_one_hit"), ("crime_two", "crime_two_hit"),
+    }
+
+
+def test_capa_details_name_the_features_that_matched():
+    """Live: a model asked three times which strings an anti-VM rule saw. It
+    matched 'Xen7' from compressed data, and nothing in the result said so."""
+    from types import SimpleNamespace as Node
+
+    from mira.capabilities.static.capa_analyzer import MAX_MATCHED, _matched
+
+    def leaf(text, success=True):
+        return Node(success=success, statement=text, children=[])
+
+    regex = 'regex(string =~ /^Xen/i, matches = "Xen7")'
+    first = Node(success=True, statement="or(...)", children=[leaf(regex), leaf("regex(/HVM domU/)", success=False)])
+    again = Node(success=True, statement="or(...)", children=[leaf(regex)])
+    many = Node(success=True, statement="or(...)", children=[leaf(f"api(F{index})") for index in range(MAX_MATCHED + 5)])
+
+    assert _matched([first, again]) == [regex]
+    assert len(_matched([many])) == MAX_MATCHED

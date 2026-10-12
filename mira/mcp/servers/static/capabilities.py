@@ -99,7 +99,12 @@ STATIC_CAPABILITIES = {
         ),
         CapabilityDefinition(
             name="run_capa",
-            description="Detect CAPA capabilities.",
+            description=(
+                "Detect CAPA capabilities. data.findings holds one compact line per matched rule "
+                "(namespace, ATT&CK and MBC ids, match count); data.details holds each rule's full record "
+                "in the same order (description, scopes, full ATT&CK/MBC entries, references, match addresses, and the matched features: the APIs, numbers and strings that made it fire). "
+                "Read the details you need with recall_observation(path=\"data.details\", where={\"rule_id\": [...]})."
+            ),
             category="detection",
             supported_artifact_types=("pe",),
             input_model=RunCapaInput,

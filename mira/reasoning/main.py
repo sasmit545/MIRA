@@ -15,6 +15,7 @@ from mira.agents.static.wiring import (
     STATIC_ROLE,
     STATIC_SCOPE,
     build_client,
+    build_evidence_executor,
     build_executor,
     tool_manifest,
 )
@@ -30,7 +31,12 @@ from .composition import (
 from .contracts.objective import Objective
 from .contracts.output import FinalOutput
 from .definition.agent import AgentDefinition
+from .model.adapter import DEFAULT_MODEL, MODELS
 from .runtime.tool_runtime import ToolRuntime
+
+# Asks for a verdict without presuming suspicion (R7). The web console and the
+# benchmark import it; dashboard.html and README.md carry the same text.
+DEFAULT_OBJECTIVE = "Determine whether this file is malicious, benign, or undetermined from static evidence."
 
 
 async def investigate(
@@ -62,15 +68,21 @@ async def investigate(
         output_contract=FinalOutput,
     )
 
+    run_id = build_run_id(sample_path.stem, objective_text)
+    evidence: list = []
+    execute = build_evidence_executor(
+        build_executor(client, artifact_id),
+        run_id=run_id,
+        artifact_id=artifact_id,
+        evidence=evidence,
+    )
     loop = build_loop(
-        tool_runtime=ToolRuntime(manifest, build_executor(client, artifact_id)),
-        tracer=build_tracer(
-            run_id=build_run_id(sample_path.stem, objective_text), trace_dir=trace_dir
-        ),
+        tool_runtime=ToolRuntime(manifest, execute),
+        tracer=build_tracer(run_id=run_id, trace_dir=trace_dir),
         model=model,
         on_turn=on_turn,
     )
-    return await loop.run(Objective(description=objective_text), agent_def)
+    return await loop.run(Objective(description=objective_text), agent_def, evidence=evidence)
 
 
 def _print_turn(event: dict) -> None:
@@ -83,6 +95,13 @@ def _print_turn(event: dict) -> None:
             args = ", ".join(f"{name}={value!r}" for name, value in call.arguments.items())
             status = "ok" if result.success else f"error: {result.error}"
             print(f"[turn {turn}] {call.name}({args}) -> {status}")
+    elif kind == "memory_rejected":
+        print(f"[turn {turn}] notes rejected: {event['failure']}")
+    elif kind == "notes":
+        memory = event["memory"]
+        print(f"[turn {turn}] notes: {len(memory.hypotheses)} hypotheses, {len(memory.open_questions)} open questions")
+    elif kind == "recall":
+        print(f"[turn {turn}] recall_observation({', '.join(map(str, event['handles']))})")
     elif kind == "report_rejected":
         print(f"[turn {turn}] report rejected: {event['failure']}")
     elif kind == "empty":
@@ -95,11 +114,12 @@ def main() -> None:
     load_env()
     parser = argparse.ArgumentParser(description="Investigate a sample with the static agent.")
     parser.add_argument("sample", type=Path, help="path to the sample to investigate")
-    parser.add_argument("--objective", default="Identify suspicious behavior")
+    parser.add_argument("--objective", default=DEFAULT_OBJECTIVE)
     parser.add_argument("--trace-dir", type=Path, default=Path("runs"))
     parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
     parser.add_argument("--max-tool-calls", type=int, default=DEFAULT_MAX_TOOL_CALLS)
     parser.add_argument("--quiet", action="store_true", help="don't print each turn as it happens")
+    parser.add_argument("--model", choices=list(MODELS), default=DEFAULT_MODEL, help="which model investigates")
     arguments = parser.parse_args()
 
     output = asyncio.run(
@@ -109,6 +129,7 @@ def main() -> None:
             trace_dir=arguments.trace_dir,
             max_turns=arguments.max_turns,
             max_tool_calls=arguments.max_tool_calls,
+            model=arguments.model,
             on_turn=None if arguments.quiet else _print_turn,
         )
     )

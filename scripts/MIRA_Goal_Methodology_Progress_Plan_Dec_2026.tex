@@ -1,0 +1,254 @@
+\documentclass[11pt,a4paper]{article}
+
+% Compile with pdfLaTeX
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=0.85in]{geometry}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{titlesec}
+\usepackage{microtype}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+
+\definecolor{mirablue}{HTML}{183B56}
+\definecolor{mirateal}{HTML}{168C8C}
+\definecolor{lightblue}{HTML}{EAF2F8}
+\definecolor{lightteal}{HTML}{E8F5F3}
+\definecolor{muted}{HTML}{52616B}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=mirablue,
+  urlcolor=mirateal,
+  pdftitle={MIRA — Goal, Methodology, Progress and Plan to December 2026},
+  pdfauthor={MIRA Project}
+}
+\titleformat{\section}{\Large\bfseries\color{mirablue}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\bfseries\color{mirateal}}{\thesubsection}{0.7em}{}
+\setlist[itemize]{leftmargin=1.5em,itemsep=2pt,topsep=3pt}
+\setlist[enumerate]{leftmargin=1.7em,itemsep=3pt,topsep=3pt}
+\renewcommand{\arraystretch}{1.22}
+\setlength{\parskip}{5pt}
+\setlength{\parindent}{0pt}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small\textcolor{muted}{MIRA Project}}
+\rhead{\small\textcolor{muted}{Progress and Plan | October 2026}}
+\cfoot{\small\textcolor{muted}{\thepage\ of \pageref{LastPage}}}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\status}[1]{\textbf{\textcolor{mirateal}{#1}}}
+
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  \vspace*{1.1cm}
+  {\Large\bfseries\textcolor{mirateal}{MIRA PROJECT REPORT}\par}
+  \vspace{0.5cm}
+  {\Huge\bfseries\textcolor{mirablue}{Goal, Methodology, Progress\\[0.15em] and Plan to December 2026}\par}
+  \vspace{0.8cm}
+  {\large Adaptive Multi-Agent Malware Investigation\par}
+  \vspace{1.5cm}
+  \color{mirateal}\rule{0.72\textwidth}{1.2pt}
+  \vspace{1.2cm}
+
+  \begin{minipage}{0.82\textwidth}
+    \large
+    \textbf{Current focus}\\[0.25em]
+    Build a reliable, measurable Static specialist and connect it to a contract-driven Coordinator, while keeping Dynamic and Forensics as later extensions.
+  \end{minipage}
+
+  \vfill
+  {\large Draft for review\par}
+  \vspace{0.25cm}
+  {\normalsize 11 October 2026\par}
+  \vspace{0.2cm}
+  {\small\textcolor{muted}{Progress reflects repository work, including 107 commits since 4 September 2026. The October--December roadmap is proposed work, not a statement of completed implementation.}\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{Goal}
+
+Build \textbf{MIRA}, an adaptive multi-agent malware investigation system. A Coordinator decides \emph{who} investigates next. Domain specialists---Static, Dynamic, and Forensics---decide \emph{how} to investigate within their domain, using tools accessed only through MCP servers. Findings and evidence are recorded in a shared investigation state.
+
+MIRA is deliberately \textbf{not} a fixed Static $\rightarrow$ Dynamic $\rightarrow$ Forensics pipeline. New evidence or a newly discovered artifact may send the investigation back to any specialist.
+
+\begin{quote}
+\colorbox{lightblue}{\parbox{0.93\linewidth}{
+\textbf{\textcolor{mirablue}{Target outcome by December 2026}}\\
+A working Static specialist whose verdict reliability is measured on labeled samples, plus a Coordinator that drives the specialist through the \code{INVESTIGATE}/\code{FINDING} contract. Dynamic and Forensics remain design work unless the schedule permits further implementation.
+}}
+\end{quote}
+
+\section{Subgoals}
+
+\begin{enumerate}
+  \item \textbf{Static vertical slice.} An LLM-driven specialist chooses among static-analysis tools, recovers from tool failures, and leaves a complete investigation trace.
+  \item \textbf{Working memory.} The specialist retains hypotheses, open questions, and facts across many tool calls without placing raw tool output in its prompt.
+  \item \textbf{Retrieval at scale.} The agent can examine complete import, string, and function lists without overflowing context. The trace and report state what was examined and what was not.
+  \item \textbf{Verdict reliability.} A malicious verdict must rest on corroborated, strong evidence. False-positive and detection rates are measured on a labeled set rather than inferred from individual files.
+  \item \textbf{Coordinator and contract.} Replace the Coordinator stub with message passing over \code{INVESTIGATE}, \code{FINDING}, \code{ARTIFACT}, \code{REQUEST\_SPECIALIST}, and \code{STATUS}.
+  \item \textbf{Large and nested artifacts.} Treat installers and padded files as a small program plus a data blob. Extract components as child artifacts and preserve their lineage.
+\end{enumerate}
+
+\section{Methodology}
+
+\subsection{Architecture}
+MIRA is organized into four layers:
+\begin{itemize}
+  \item \code{mira.core}: shared investigation state.
+  \item \code{mira.reasoning}: the reasoning harness and control loop.
+  \item \code{mira.agents}: specialist-specific behavior and wiring.
+  \item \code{mira.capabilities} and \code{mira.mcp}: capability implementations and MCP interfaces.
+\end{itemize}
+Each capability runs in an isolated worker behind FastMCP. This keeps tools replaceable without requiring changes to the agent.
+
+\subsection{Two reasoning levels}
+The specialist runs a local \emph{plan $\rightarrow$ call tool $\rightarrow$ interpret} loop. The Coordinator runs the global loop over shared investigation state. Their contexts remain separate: specialist working memory is distinct from global investigation state.
+
+\subsection{State instead of transcript}
+Agents exchange compact references and evidence identifiers, not raw tool output. Evidence is created by code from tool results using normalizer rules and grades, rather than being invented by the model. Model-authored notes may cite only evidence identifiers that have already been minted by the system.
+
+\subsection{Code-enforced invariants}
+\begin{itemize}
+  \item Memory-note updates are validated atomically: an invalid update is rejected as a whole.
+  \item A deterministic verdict gate checks a report's verdict against the grade and source of the evidence it cites.
+  \item Reasoning loops are bounded and terminate with a report rather than running indefinitely.
+\end{itemize}
+
+\subsection{Plan-first delivery}
+Each feature has a written plan under \code{docs/plans/}, including requirements, key technical decisions, numbered implementation units, and stop conditions. Work is committed unit by unit, with tests for each unit. Where a measurement is required to justify a change, that measurement precedes the next implementation step.
+
+\subsection{Evaluation methodology}
+A labeled benchmark records each sample's hash, label provenance, and split. Metrics are computed over \textbf{unique files}, with uncertainty intervals where feasible. The evaluation reports:
+\begin{itemize}
+  \item false-positive rate (FPR), precision, and recall;
+  \item Matthews correlation coefficient (MCC);
+  \item abstention rate, coverage, and failures.
+\end{itemize}
+A no-model survey measures how often each evidence rule fires on benign and malicious files. Evidence grades are changed only when survey coverage is sufficient to support the change.
+
+\subsection{Model and observability}
+The model can be any OpenAI-compatible endpoint configured through environment variables. Runs are traced to disk, with model calls, recalls, refusals, and token usage counted for later analysis.
+
+\section{Work Done: 4 September--11 October 2026}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.19\textwidth} Y}
+\toprule
+\textbf{Period} & \textbf{Delivered work}\\
+\midrule
+\endhead
+4--11 September &
+Repository foundation and CI; isolated asynchronous Static MCP server; YARA and capa integration; Pydantic contract layer; 11 static capabilities; first runnable agent with run traces.\\
+
+11--14 September &
+Restructuring into specialist-agnostic \code{mira.reasoning} with Static-specific wiring. The \code{FINDING} contract, defining what crosses the specialist boundary, was merged to \code{main}.\\
+
+15 September--10 October &
+\textbf{Working memory} (plan units U1--U9 completed): validated \code{record\_memory} notes, additive merge, capability history, structural digests, \code{recall\_observation}, and promotion of hypotheses to shared state when a report completes. In a live probe, notes and capability calls arrived together on 25 of 25 turns.\\
+
+11 October &
+\textbf{Retrieval pipeline:} whole lists collected once with totals and coverage; recall filters and per-value counts; retrieval ledger; and stalled-walk handling.\\
+&
+\textbf{Benchmark harness:} label provenance and dataset splits.\\
+&
+\textbf{Evidence and verdict checks:} evidence grades exposed to the model and a verdict gate over cited evidence.\\
+&
+\textbf{Investigation interface:} web console with evidence explorer and trace inspector. Normalizer fixes for traits common to many Windows binaries.\\
+\midrule
+\textbf{Current test status} &
+295+ tests pass on branch \code{feat/static-agent-working-memory}. This is branch-level test status; it does not by itself establish detection accuracy or verdict reliability.\\
+\bottomrule
+\end{longtable}
+
+\subsection{Open problem: benign Notepad classified as malicious}
+The genuine, catalog-signed \code{notepad.exe} was judged malicious in 10 of 11 benchmark runs. Four normalizer defects were fixed---function density, capa grading, section names, and debugger imports---but the final check still returned a malicious verdict.
+
+The verdict-reliability work (the deterministic gate and survey-based evidence grades) is intended to address this failure mode. \textbf{Its effect has not yet been measured.} The Notepad result is therefore an unresolved evaluation finding, not evidence that the reliability problem has been solved.
+
+\subsection{Not yet built}
+\begin{itemize}
+  \item The Coordinator is still a stub.
+  \item The message contract is design intent, not an implemented end-to-end workflow.
+  \item Dynamic and Forensics agents and their MCP servers do not yet exist.
+\end{itemize}
+
+\section{Plan: October--December 2026 (Proposed)}
+
+\small
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.15\textwidth} >{\raggedright\arraybackslash}p{0.30\textwidth} Y}
+\toprule
+\textbf{When} & \textbf{Milestone} & \textbf{Acceptance criteria}\\
+\midrule
+\endhead
+October, weeks 2--3 &
+\textbf{Complete Phase 2 acceptance on real samples.} Decide whether to commit \code{docs/} and \code{plan/}. &
+Run \code{notepad.exe} end to end; count recall use; merge the branch to \code{main}.\\
+
+October, weeks 3--4 &
+\textbf{Build the labeled sample set and record baseline.} Use the existing benign-download script and obtain malicious samples from public corpora. &
+Report baseline FPR, recall, and MCC on unique files, with uncertainty intervals. Record provenance and splits.\\
+
+November, weeks 1--2 &
+\textbf{Apply survey-based evidence grades and verdict gate.} &
+Re-run the benchmark and publish a measured before/after comparison. Make claims only as strong as the results support.\\
+
+November, weeks 2--3 &
+\textbf{Large-artifact plan and implementation.} Add streamed upload, size-tolerant cheap capabilities, overlay detection, and child artifacts with lineage. &
+A 200 MB or larger installer produces smaller analyzable child artifacts.\\
+
+November, weeks 3--4 &
+\textbf{Coordinator v1.} Implement \code{INVESTIGATE}/\code{FINDING} message passing and assignments based on shared-state evidence; support Static re-entry when new artifacts appear. &
+The Coordinator runs Static twice on one sample, with a newly discovered artifact between runs.\\
+
+December, weeks 1--2 &
+\textbf{Dynamic specialist design and thin prototype.} Execution remains behind an external sandbox and the MCP boundary. &
+Complete one Static $\rightarrow$ Dynamic $\rightarrow$ Static run, or produce a design document if sandbox access is unavailable.\\
+
+December, weeks 3--4 &
+\textbf{Final evaluation and write-up.} Run ablations with and without working memory, recall, and the verdict gate. &
+Deliver a report covering results, limitations, and next steps.\\
+\bottomrule
+\end{longtable}
+\normalsize
+
+\section{Risks and Priorities}
+
+\begin{itemize}
+  \item \textbf{Benchmark duration and sample labels.} Long benchmark runs and the effort required to curate labeled samples limit iteration speed.
+  \item \textbf{Model cost and variance.} Endpoint costs and run-to-run variability can affect repeatability; model calls, token usage, and configuration should be recorded.
+  \item \textbf{Dynamic sandbox dependency.} The December Dynamic milestone depends on sandbox availability and is the first candidate to slip.
+  \item \textbf{Priority order.} Benchmark quality and Coordinator functionality take priority over the Dynamic prototype if schedule or infrastructure becomes constrained.
+\end{itemize}
+
+\section{Success Criteria by December 2026}
+
+By the end of December, the project should aim to demonstrate:
+\begin{enumerate}
+  \item a repeatable Static investigation with complete traces and bounded retrieval;
+  \item a labeled, provenance-tracked benchmark with reported metrics;
+  \item a measured evaluation of evidence grades and the verdict gate, including benign false positives;
+  \item a Coordinator that can reassign Static after a new artifact is discovered;
+  \item a transparent final report documenting achieved results, limitations, and unfinished work.
+\end{enumerate}
+
+\vfill
+\begin{center}
+\color{mirateal}\rule{0.45\textwidth}{0.8pt}\\[0.4em]
+{\small\textcolor{muted}{MIRA --- Draft for review, 11 October 2026}}
+\end{center}
+
+\end{document}

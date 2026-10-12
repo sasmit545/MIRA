@@ -111,10 +111,20 @@ The **static-analysis vertical slice** runs end to end: an LLM-driven agent inve
 
 ```bash
 python -m mira.reasoning.main sample.exe \
-    --objective "Identify suspicious behavior" \
+    --objective "Determine whether this file is malicious, benign, or undetermined from static evidence." \
     --max-turns 5 --max-tool-calls 5 --trace-dir runs
     # --quiet to suppress the live per-turn output
 ```
+
+The model is any OpenAI-compatible chat endpoint. Set three environment variables, or put them in a `.env` file in the working directory:
+
+| Variable | Meaning |
+|---|---|
+| `MODEL_API_KEY` | The endpoint's API key |
+| `MODEL_BASE_URL` | The endpoint's OpenAI-compatible base URL, such as `https://<resource>.services.ai.azure.com/openai/v1` |
+| `MODEL_NAME` | The deployment or model name to call |
+
+None has a default: a missing one stops the run with its name.
 
 Everything above the line is the target architecture. Today, concretely:
 

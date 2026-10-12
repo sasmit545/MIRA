@@ -2,7 +2,10 @@ Metadata-Version: 2.4
 Name: mira
 Version: 0.1.0
 Requires-Python: >=3.11
+Requires-Dist: openai>=1.40
 Requires-Dist: fastmcp==2.14.3
+Requires-Dist: fastapi>=0.115
+Requires-Dist: python-multipart>=0.0.9
 Requires-Dist: pefile==2024.8.26
 Requires-Dist: capstone==5.0.6
 Requires-Dist: yara-python==4.5.4

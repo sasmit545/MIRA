@@ -14,7 +14,9 @@ from mira.core.state import InvestigationState
 from mira.core.objective import InvestigationObjective
 from mira.core.task import InvestigationTask
 from mira.agents.static.agent import StaticAgent
-from support import ToolThenReportModel
+from mira.reasoning.contracts.model import ModelResponse
+from mira.reasoning.contracts.tool import ToolCall
+from support import REPORT, ToolThenReportModel
 
 
 def build_state() -> InvestigationState:
@@ -225,3 +227,140 @@ async def test_the_deposit_is_logged_once_in_the_state_history(tmp_path):
 
     added = [entry for entry in state.history if entry["change_type"] == "evidence_added"]
     assert len(added) == 1
+
+
+# --- Hypotheses promote on a reported completion only (U7) ------------------
+
+
+def notes(*hypotheses, **fields):
+    return {"understanding": "", "hypotheses": list(hypotheses), "open_questions": [], "candidates": [], **fields}
+
+
+PACKER_CALL = ToolCall(tool_call_id="p", name="detect_packer", arguments={})
+FIRST = notes(
+    {"id": "H1", "statement": "Packed with UPX.", "confidence": 0.5, "status": "open"},
+    understanding="Triage.",
+    open_questions=[{"id": "Q1", "question": "What does the unpacked code do?"}],
+)
+
+
+def second(evidence_id="E1"):
+    """Revises H1 against the evidence and adds H2, on a later turn than the call."""
+    return notes(
+        {"id": "H1", "confidence": 0.2, "status": "weakened", "contradicting_evidence": [evidence_id],
+         "unknowns": "whether the stub is custom"},
+        {"id": "H2", "statement": "A custom packer.", "confidence": 0.7, "status": "supported",
+         "supporting_evidence": [evidence_id]},
+        understanding="Packed, but not plain UPX.",
+    )
+
+
+class NotesModel:
+    """Replays its responses, repeating the last; records the shared state's
+    hypotheses as each prompt arrives."""
+
+    def __init__(self, state, *responses):
+        self.state = state
+        self.responses = list(responses)
+        self.seen = []
+
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()  # declines the forced notes call; the script is not consumed
+        self.seen.append(len(self.state.hypotheses) if self.state is not None else None)
+        return self.responses[min(len(self.seen) - 1, len(self.responses) - 1)]
+
+
+def reported(evidence_id="E1"):
+    return (
+        ModelResponse(tool_calls=[PACKER_CALL], memory_update=FIRST),
+        ModelResponse(memory_update=second(evidence_id)),
+        ModelResponse(report=REPORT),
+    )
+
+
+REPORTED = reported()
+
+
+async def run_notes(tmp_path, state, *responses, name="Assess packing", max_turns=10):
+    model = NotesModel(state, *responses)
+    agent = StaticAgent(ScriptedClient(), model=model, trace_dir=tmp_path, max_turns=max_turns)
+    return model, await agent.investigate(objective(name), "sample-1", state=state)
+
+
+async def test_a_reported_run_promotes_its_latest_notes(tmp_path):
+    state = InvestigationState()
+
+    model, _ = await run_notes(tmp_path, state, *REPORTED)
+
+    assert model.seen == [0, 0, 0]  # nothing deposited mid-run
+    h1, h2 = state.get_hypothesis_by_id("H1"), state.get_hypothesis_by_id("H2")
+    assert (h1.statement, h1.confidence, h1.status) == ("Packed with UPX.", 0.2, "weakened")
+    assert h1.contradicting_evidence == ["E1"]
+    assert (h2.status, h2.supporting_evidence) == ("supported", ["E1"])
+    for hypothesis in state.hypotheses:
+        for ref in hypothesis.supporting_evidence + hypothesis.contradicting_evidence:
+            assert state.get_evidence_by_id(ref) is not None
+    added = [entry for entry in state.history if entry["change_type"] == "hypothesis_added"]
+    assert len(added) == 2
+
+
+async def test_the_assessment_names_hypotheses_unknowns_and_open_questions(tmp_path):
+    _, finding = await run_notes(tmp_path, InvestigationState(), *REPORTED)
+
+    assert finding.assessment.startswith("inconclusive: done")
+    assert "Understanding: Packed, but not plain UPX." in finding.assessment
+    assert "- H1 (weakened, 0.20) Packed with UPX. — unknown: whether the stub is custom" in finding.assessment
+    assert "- H2 (supported, 0.70) A custom packer." in finding.assessment
+    assert "- What does the unpacked code do?" in finding.assessment
+
+
+async def test_a_degraded_run_deposits_evidence_but_no_hypotheses(tmp_path):
+    state = InvestigationState()
+    bad = ModelResponse(memory_update=notes({"id": "H1", "confidence": "very"}))
+
+    _, finding = await run_notes(tmp_path, state, REPORTED[0], bad)
+
+    assert finding.assessment.startswith("inconclusive:")
+    assert len(state.evidence) == 1
+    assert state.hypotheses == []
+
+
+async def test_a_promoted_hypothesis_cites_only_resolvable_evidence(tmp_path):
+    state = InvestigationState()
+    citing = notes({"id": "H1", "statement": "Packed.", "confidence": 0.6, "status": "supported",
+                    "supporting_evidence": ["E1", "E99"]})
+
+    await run_notes(tmp_path, state, REPORTED[0], ModelResponse(memory_update=citing), REPORTED[2])
+
+    assert state.get_hypothesis_by_id("H1").supporting_evidence == ["E1"]
+
+
+async def test_a_run_out_of_turns_promotes_nothing(tmp_path):
+    state = InvestigationState()
+
+    await run_notes(tmp_path, state, *REPORTED[:2], max_turns=2)
+
+    assert state.hypotheses == []
+
+
+async def test_a_run_without_state_still_reports_its_notes(tmp_path):
+    _, finding = await run_notes(tmp_path, None, *REPORTED)
+
+    assert "- H2 (supported, 0.70) A custom packer." in finding.assessment
+
+
+async def test_promoted_ids_continue_past_what_the_state_holds(tmp_path):
+    state = InvestigationState()
+    state.add_hypothesis(Hypothesis(id="H1", statement="Earlier belief."))
+
+    _, first = await run_notes(tmp_path, state, *REPORTED)
+    # The second run mints E2, so its notes cite that.
+    _, later = await run_notes(tmp_path, state, *reported("E2"), name="Assess capability")
+
+    assert [h.id for h in state.hypotheses] == ["H1", "H2", "H3", "H4", "H5"]
+    assert state.hypotheses[0].statement == "Earlier belief."
+    # The assessment cites the ids a reader can look up in the state.
+    assert "- H2 (weakened" in first.assessment and "- H3 (supported" in first.assessment
+    assert "- H4 (weakened" in later.assessment
+    assert state.get_hypothesis_by_id("H5").supporting_evidence == ["E2"]

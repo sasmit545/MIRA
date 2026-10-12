@@ -77,4 +77,4 @@ def paginate(items: list[Any], limit: int = DEFAULT_LIMIT, offset: int = 0) -> t
     if not isinstance(limit, int) or not isinstance(offset, int) or limit < 1 or limit > MAX_LIMIT or offset < 0:
         raise ValueError(f"limit must be 1..{MAX_LIMIT} and offset must be non-negative")
     selected = items[offset : offset + limit]
-    return selected, {"limit": limit, "offset": offset, "has_more": offset + len(selected) < len(items)}
+    return selected, {"limit": limit, "offset": offset, "has_more": offset + len(selected) < len(items), "total": len(items)}

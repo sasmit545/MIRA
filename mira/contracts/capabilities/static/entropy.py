@@ -19,7 +19,7 @@ class CalculateEntropyInput(Contract):
     artifact_id: str = Field(..., description="Identifier of the artifact")
     offset: int | None = Field(None, ge=0, description="Start of the region to measure; supply with length")
     length: int | None = Field(None, ge=1, description="Size of the region to measure; supply with offset")
-    chunk_size: int | None = Field(None, ge=1, description="Split the region into fixed-size windows and report entropy per window; requires offset and length")
+    chunk_size: int | None = Field(None, ge=1, description="Split the region into fixed-size windows and report entropy per window, at most 1024 windows; requires offset and length")
 
 
 class CalculateEntropyOutput(Contract):

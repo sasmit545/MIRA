@@ -1,10 +1,11 @@
 """Investigation state."""
 
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
+from dataclasses import asdict, dataclass, field
+from typing import List, Optional, Dict, Any, FrozenSet
 from ..contracts.objective import Objective
 from ..contracts.tool import ToolCall, ToolResult
 from ..contracts.finding import Finding
+from ..contracts.memory import WorkingMemory
 
 
 @dataclass
@@ -23,9 +24,26 @@ class State:
     findings: List[Finding] = field(default_factory=list)
     evidence: List[Any] = field(default_factory=list)  # Curated subset of observations
     observations: List[Dict[str, Any]] = field(default_factory=list)  # Each observation: {'call': ToolCall, 'result': ToolResult}
-    scratch: Dict[str, Any] = field(default_factory=dict)  # visible to model, excluded from output
+    working_memory: WorkingMemory = field(default_factory=WorkingMemory)
+    # Recall answers from this turn, shown in the next prompt only (KTD10). The
+    # prompt is rebuilt from state each turn, so this is the only way one lands.
+    recalled: List[str] = field(default_factory=list)
+    # Run counters the benchmark reads from the metadata (R19).
+    model_calls: int = 0
+    recalls_requested: int = 0
+    repeat_recalls: int = 0
+    reruns_refused: int = 0
+    findings_discarded: int = 0
+    # The retrieval ledger (KTD7), kept apart from evidence: each answered
+    # recall's normalized query mapped to the turn that asked it, and per handle
+    # and array path, each item index shown with the keys shown (None: all).
+    recall_fingerprints: Dict[str, int] = field(default_factory=dict)
+    shown_items: Dict[str, Dict[str, Dict[int, Optional[FrozenSet[str]]]]] = field(default_factory=dict)
 
     def record_usage(self, usage: Optional[Dict[str, int]]) -> None:
+        """Called once per model response, so it also counts the call: a
+        provider that reports no usage still cost one."""
+        self.model_calls += 1
         if usage is None:
             return
         self.total_prompt_tokens += usage.get("prompt_tokens", 0)
@@ -45,6 +63,14 @@ class State:
         # This should not happen if we call record_tool_call before record_tool_result
         raise RuntimeError("No pending tool call to record result for")
 
+    def record_harness_observation(self, call: ToolCall, result: ToolResult) -> None:
+        """Log a harness-tool outcome (a rejected narrative, say) for the model
+        and the trace without spending capability budget: record_tool_call is
+        the only other way in, and it counts toward max_tool_calls."""
+        # Marked so the capability history skips it: a skipped duplicate carries
+        # a capability's name, yet it never ran and must take no occurrence.
+        self.observations.append({'call': call, 'result': result, 'harness': True})
+
     def add_finding(self, finding: Finding) -> None:
         self.findings.append(finding)
 
@@ -60,7 +86,7 @@ class State:
             'findings_count': len(self.findings),
             'evidence_count': len(self.evidence),
             'observations_count': len(self.observations),
-            'scratch': self.scratch.copy(),
+            'working_memory': asdict(self.working_memory),
             'run_id': self.run_id,
             'total_tokens': self.total_tokens,
         }

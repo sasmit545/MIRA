@@ -75,3 +75,20 @@ def test_record_non_empty_response():
     checker.consecutive_empty_responses = 2
     checker.record_non_empty_response()
     assert checker.consecutive_empty_responses == 0
+
+
+def test_rejected_reports_have_their_own_bound():
+    from mira.reasoning.runtime.completion import MAX_REPORT_REJECTIONS
+
+    state = State(objective=Objective(description="o"), run_id="r")
+    agent_def = AgentDefinition(
+        role="r", scope="s", tool_manifest=[], allowed_tools=[], max_turns=100, max_tool_calls=100, output_contract=object,
+    )
+    checker = CompletionChecker()
+    for _ in range(MAX_REPORT_REJECTIONS - 1):
+        checker.record_report_rejection()
+    assert checker.is_active(state, agent_def)
+
+    checker.record_report_rejection()
+
+    assert not checker.is_active(state, agent_def)

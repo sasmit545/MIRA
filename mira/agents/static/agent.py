@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from pathlib import Path
 
 from mira.agents.base import InvestigationFinding
-from mira.agents.static.evidence import normalize
 from mira.agents.static.wiring import (
     STATIC_ROLE,
     STATIC_SCOPE,
+    build_evidence_executor,
     build_executor,
     tool_manifest,
 )
@@ -18,6 +17,7 @@ from mira.contracts.capabilities.static.list_imports import ListImportsInput, Li
 from mira.contracts.requests import CapabilityRequest
 from mira.contracts.results import CapabilityResult
 from mira.core.evidence import Evidence
+from mira.core.hypothesis import Hypothesis
 from mira.core.objective import InvestigationObjective
 from mira.core.state import InvestigationState
 from mira.mcp.client import StaticMCPClient
@@ -29,13 +29,11 @@ from mira.reasoning.composition import (
     build_tracer,
 )
 from mira.reasoning.contracts.finding import Confidence, Finding, Severity
+from mira.reasoning.contracts.memory import WorkingMemory
 from mira.reasoning.contracts.objective import Objective as LoopObjective
 from mira.reasoning.contracts.output import FinalOutput
 from mira.reasoning.definition.agent import AgentDefinition
 from mira.reasoning.runtime.tool_runtime import ToolRuntime
-from mira.reasoning.runtime.trace import trace_provenance
-
-SOURCE_AGENT = "static"
 
 # Enum declaration order is ascending, so it doubles as the ranking.
 _SEVERITY_RANK = {member: rank for rank, member in enumerate(Severity)}
@@ -58,6 +56,52 @@ def _overall_confidence(findings: list[Finding]) -> Confidence:
         ),
     )
     return gravest.confidence
+
+
+def _promote(memory: WorkingMemory, state: InvestigationState) -> dict[str, str]:
+    """Deposit the final hypotheses; returns each note id's shared-state id.
+
+    Numbering continues past what the state holds, as evidence numbering
+    does: two runs both depositing "H1" would make the id ambiguous.
+    """
+    ids = {}
+    for note in memory.hypotheses:
+        shared_id = f"H{len(state.hypotheses) + 1}"
+        # add_hypothesis already logs the change into its history.
+        state.add_hypothesis(
+            Hypothesis(
+                id=shared_id,
+                statement=note.statement,
+                confidence=note.confidence,
+                supporting_evidence=list(note.supporting_evidence),
+                contradicting_evidence=list(note.contradicting_evidence),
+                status=note.status,
+            )
+        )
+        ids[note.id] = shared_id
+    return ids
+
+
+def _assessment(output: FinalOutput, ids: dict[str, str]) -> str:
+    """The verdict leads, then what the run believed and could not settle (R22).
+
+    `core.Hypothesis` has no unknowns field, so they live here instead.
+    """
+    memory = output.memory
+    lines = [f"{output.verdict}: {output.summary}"]
+    if memory.understanding:
+        lines.append(f"Understanding: {memory.understanding}")
+    if memory.hypotheses:
+        lines.append("Hypotheses weighed:")
+    for note in memory.hypotheses:
+        line = f"- {ids.get(note.id, note.id)} ({note.status}, {note.confidence:.2f}) {note.statement}"
+        if note.unknowns:
+            line += f" — unknown: {note.unknowns}"
+        lines.append(line)
+    if memory.open_questions:
+        lines.append("Unresolved questions:")
+    lines.extend(f"- {question.question}" for question in memory.open_questions)
+    return "\n".join(lines)
 
 
 class StaticAgent:
@@ -116,43 +160,15 @@ class StaticAgent:
         deposits its evidence into. Without one the run behaves exactly as
         before, which is what the CLI path wants.
         """
-        results: dict[str, dict] = {}
         evidence: list[Evidence] = []
         run_id = build_run_id(artifact_id, objective.name)
-        invoke = build_executor(self._client, artifact_id)
-        # The specialist is the one place that sees every result in order, so
-        # it is where evidence identifiers are minted (KTD1). Positions are
-        # counted per capability: the runtime refuses a capability outside the
-        # objective before it reaches this executor, yet the refusal still
-        # reaches the trace, so a single run-wide counter drifts from it.
-        occurrences: Counter[str] = Counter()
-        # Numbering continues past whatever the shared state already holds:
-        # two runs both minting "E1" would leave their findings citing an
-        # identifier the orchestrator cannot resolve to one observation.
-        minted = len(state.evidence) if state is not None else 0
-
-        async def execute(capability: str, arguments: dict):
-            result = await invoke(capability, arguments)
-            provenance = trace_provenance(run_id, capability, occurrences[capability])
-            occurrences[capability] += 1
-            # `results` is deliberately read before this result joins it: a
-            # normalizer's `prior` is what earlier capabilities reported.
-            for signal in normalize(capability, result, results):
-                item = Evidence(
-                    id=f"E{minted + len(evidence) + 1}",
-                    observation=signal.observation,
-                    source_agent=SOURCE_AGENT,
-                    capability=capability,
-                    artifact_id=artifact_id,
-                    confidence=signal.confidence,
-                    provenance=provenance,
-                )
-                evidence.append(item)
-                if state is not None:
-                    # add_evidence already logs the change into its history.
-                    state.add_evidence(item)
-            results[capability] = result
-            return result
+        execute = build_evidence_executor(
+            build_executor(self._client, artifact_id),
+            run_id=run_id,
+            artifact_id=artifact_id,
+            evidence=evidence,
+            state=state,
+        )
 
         manifest = tool_manifest()
         permitted = [spec for spec in manifest if spec.name in objective.capabilities]
@@ -177,12 +193,17 @@ class StaticAgent:
             agent_definition,
             evidence=evidence,
         )
+        # Only a reported run's notes are current: a run that stopped early
+        # may hold beliefs written before its last results arrived.
+        ids = {}
+        if state is not None and output.completion_reason == "reported":
+            ids = _promote(output.memory, state)
         return InvestigationFinding(
             artifact_id=artifact_id,
             # The verdict leads the assessment rather than taking a field of
             # its own: section 10's payload names an assessment, and a reader
             # needs the judgement in the sentence they are given.
-            assessment=f"{output.verdict}: {output.summary}",
+            assessment=_assessment(output, ids),
             findings=output.findings,
             # The loop already reduced the shared accumulator to identifiers.
             evidence_refs=output.evidence,

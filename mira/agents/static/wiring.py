@@ -9,23 +9,54 @@ in the reasoning package.
 from __future__ import annotations
 
 import os
+from collections import Counter
 from functools import lru_cache
 from pathlib import Path
 
+from mira.agents.static.evidence import PAGED_CAPABILITIES, normalize
 from mira.core.artifact import ArtifactStore
+from mira.core.evidence import Evidence
+from mira.core.state import InvestigationState
 from mira.mcp.isolation import AnalysisLimits
 from mira.mcp.servers.static.capabilities import STATIC_CAPABILITIES
 from mira.mcp.client import StaticMCPClient
 from mira.mcp.servers.static.server import StaticMCPServer
 from mira.reasoning.contracts.tool import ToolSpec
+from mira.reasoning.runtime.trace import trace_provenance
 
 ARTIFACT_ID = "sample"
+SOURCE_AGENT = "static"
 
 STATIC_ROLE = "You are a static malware investigator."
 STATIC_SCOPE = (
     "Static analysis only. The artifact under investigation is bound by the runtime, "
-    "so tool arguments never need to name it."
+    "so tool arguments never need to name it.\n"
+    "Weigh evidence in this order. First, specific YARA rule matches and capa findings that name "
+    "intent (anti-analysis, persistence, impact, a malware family). Next, imports and strings that "
+    "fit a hypothesis: injection or anti-debugging APIs, URLs, registry paths. Last, generic "
+    "anomalies such as unusual section names or ordinal-only imports, and any finding that only "
+    "restates one already counted.\n"
+    "High entropy and packing are supporting evidence, not proof: installers, compressed resources "
+    "and protected commercial software show them too. A packed file is a reason to look for what "
+    "the packing hides, not a verdict."
 )
+
+# Capabilities one call collects whole (KTD1), with the item cap that bounds
+# the walk (KTD3); each list lives under its PAGED_CAPABILITIES key. Tuning
+# knobs, like the thresholds in evidence.py. Calibrated on notepad.exe: 3,608
+# strings at under a second a page, a 4,643-instruction disassembly window at
+# about 2 s a page, and 35 capa findings in one 84 s call. Capa's lower cap
+# keeps that worker to two calls at most.
+COLLECTED_CAPABILITIES = {
+    "list_imports": 10_000,
+    "list_exports": 10_000,
+    "extract_strings": 10_000,
+    "scan_yara": 10_000,
+    "run_capa": 2_000,
+    "list_functions": 10_000,
+    "disassemble_function": 10_000,
+}
+PAGE_SIZE = 1000  # the MCP input contracts' page bound (le=1000)
 
 
 @lru_cache(maxsize=None)
@@ -37,13 +68,26 @@ def _capability_specs() -> tuple[ToolSpec, ...]:
     it is assigned. STATIC_CAPABILITIES is fixed at import, so the result is
     stable.
     """
-    return tuple(
-        ToolSpec(
-            name=definition.name,
-            description=definition.description,
-            parameters=definition.input_schema,
-        )
-        for definition in STATIC_CAPABILITIES.values()
+    return tuple(_spec(definition) for definition in STATIC_CAPABILITIES.values())
+
+
+def _spec(definition) -> ToolSpec:
+    """A collected capability hides `limit` (KTD10): the walk picks page sizes,
+    so prompt cost no longer depends on one the model chose."""
+    parameters = definition.input_schema
+    if definition.name not in COLLECTED_CAPABILITIES:
+        return ToolSpec(name=definition.name, description=definition.description, parameters=parameters)
+    cap = COLLECTED_CAPABILITIES[definition.name]
+    parameters = {
+        **parameters,
+        "properties": {name: value for name, value in parameters["properties"].items() if name != "limit"},
+        "required": [name for name in parameters.get("required", []) if name != "limit"],
+    }
+    return ToolSpec(
+        name=definition.name,
+        description=f"{definition.description} Returns the whole list in one call, up to {cap} items; "
+        "offset starts it later.",
+        parameters=parameters,
     )
 
 
@@ -142,6 +186,119 @@ def build_executor(client: StaticMCPClient, artifact_id: str):
     def execute(capability: str, arguments: dict):
         parameters = {**arguments}
         parameters.pop("artifact_id", None)
+        if capability in COLLECTED_CAPABILITIES:
+            return _collect(client, capability, artifact_id, parameters)
         return client.invoke(capability, artifact_id=artifact_id, **parameters)
+
+    return execute
+
+
+async def _collect(client: StaticMCPClient, capability: str, artifact_id: str, parameters: dict) -> dict:
+    """Walk a paged capability from the model's offset until its list ends or
+    the cap is reached, and return one envelope holding every item (KTD1).
+
+    The merged metadata states coverage (KTD2): `total`, `fetched` and
+    `unfetched` items, `pages` walked, and `next_offset` when items remain.
+    A failure after the first page keeps what was fetched and names itself in
+    `fetch_error` (R3); a first-page failure is the capability's own.
+    """
+    key, cap = PAGED_CAPABILITIES[capability][0], COLLECTED_CAPABILITIES[capability]
+    parameters.pop("limit", None)
+    start = parameters.pop("offset", 0)
+    first = await client.invoke(capability, artifact_id=artifact_id, **parameters, offset=start, limit=min(PAGE_SIZE, cap))
+    if first.get("status") != "ok" or "total" not in (first.get("metadata") or {}):
+        # A page without counters cannot be walked or described: pass it on as is.
+        return first
+    # Walk on from the offset the server validated: the model may send "500".
+    start = first["metadata"].get("offset", start)
+    # A page's lists are parallel slices (run_capa's findings and details), so
+    # every one grows together; `key` is the list that counts.
+    lists = {name: list(value) for name, value in first["data"].items() if isinstance(value, list)}
+    items = lists[key]
+    has_more = first["metadata"]["has_more"]
+    pages, fetch_error = 1, None
+    while has_more and len(items) < cap:
+        pages += 1
+        try:
+            page = await client.invoke(
+                capability, artifact_id=artifact_id, **parameters,
+                offset=start + len(items), limit=min(PAGE_SIZE, cap - len(items)),
+            )
+        except Exception as error:  # keep the pages already fetched
+            fetch_error = f"{type(error).__name__}: {error}"
+            break
+        if page.get("status") != "ok":
+            error = page.get("error") or {}
+            fetch_error = f"{error.get('code') or page.get('status')}: {error.get('message') or page.get('status')}"
+            break
+        if not page["data"][key]:
+            break  # a page that adds nothing would walk the same offset forever
+        for name, collected in lists.items():
+            collected.extend(page["data"].get(name) or [])
+        has_more = page["metadata"]["has_more"]
+
+    total = first["metadata"]["total"]
+    metadata = {key: value for key, value in first["metadata"].items() if key != "limit"}
+    metadata.update(offset=start, has_more=start + len(items) < total, total=total,
+                    fetched=len(items), unfetched=total - len(items), pages=pages)
+    if metadata["has_more"]:
+        metadata["next_offset"] = start + len(items)
+    if fetch_error:
+        metadata["fetch_error"] = fetch_error
+    return {**first, "data": {**first["data"], **lists}, "metadata": metadata}
+
+
+def build_evidence_executor(
+    invoke,
+    *,
+    run_id: str,
+    artifact_id: str,
+    evidence: list[Evidence],
+    state: InvestigationState | None = None,
+):
+    """Wrap `invoke` so each result is normalized into evidence as it arrives.
+
+    The specialist is the one place that sees every result in order, so it is
+    where evidence identifiers are minted (KTD1). `evidence` is the caller's
+    accumulator, appended to in place; `state`, when given, also receives each
+    item so it outlives the run. Without a state the run only mints and
+    renders, which is what the CLI wants.
+
+    Positions are counted per capability: the runtime refuses a capability
+    outside the objective before it reaches this executor, yet the refusal
+    still reaches the trace, so a single run-wide counter drifts from it.
+    """
+    results: dict[str, dict] = {}
+    occurrences: Counter[str] = Counter()
+    # Numbering continues past whatever the shared state already holds: two
+    # runs both minting "E1" would leave their findings citing an identifier
+    # the orchestrator cannot resolve to one observation.
+    minted = len(state.evidence) if state is not None else 0
+
+    async def execute(capability: str, arguments: dict):
+        # Claimed before invoking: a call that raises still reaches the trace
+        # as a failed result, so it occupies this capability's occurrence too.
+        provenance = trace_provenance(run_id, capability, occurrences[capability])
+        occurrences[capability] += 1
+        result = await invoke(capability, arguments)
+        # `results` is deliberately read before this result joins it: a
+        # normalizer's `prior` is what earlier capabilities reported.
+        for signal in normalize(capability, result, results):
+            item = Evidence(
+                id=f"E{minted + len(evidence) + 1}",
+                observation=signal.observation,
+                source_agent=SOURCE_AGENT,
+                capability=capability,
+                artifact_id=artifact_id,
+                confidence=signal.confidence,
+                provenance=provenance,
+                corroborates=not signal.supporting,
+            )
+            evidence.append(item)
+            if state is not None:
+                # add_evidence already logs the change into its history.
+                state.add_evidence(item)
+        results[capability] = result
+        return result
 
     return execute

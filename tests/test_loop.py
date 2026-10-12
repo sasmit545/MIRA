@@ -15,7 +15,11 @@ from mira.reasoning.runtime.loop import AgentLoop
 from mira.reasoning.runtime.tool_runtime import ToolRuntime
 from mira.reasoning.runtime.trace import Tracer
 
-REPORT = '{"summary": "test", "verdict": "test", "findings": []}'
+# inconclusive: the verdict gate refuses any verdict outside benign, malicious, inconclusive (R8).
+REPORT = '{"summary": "test", "verdict": "inconclusive", "findings": []}'
+
+# What a compliant model writes when it has nothing new to say (R9).
+NOTES = {"understanding": "", "hypotheses": [], "open_questions": [], "candidates": []}
 
 FINDING = {
     "title": "Packed executable",
@@ -28,7 +32,7 @@ FINDING = {
 
 def report(finding=None, **fields):
     """A submitted report carrying one finding, with fields overridden."""
-    body = {"summary": "test", "verdict": "suspicious", **fields}
+    body = {"summary": "test", "verdict": "inconclusive", **fields}
     if finding is not None:
         body["findings"] = [finding]
     return json.dumps(body)
@@ -55,7 +59,9 @@ class ScriptedModel:
         self.responses = list(responses)
         self.calls = 0
 
-    def generate(self, context, tools):
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()  # declines the forced notes call; the script is not consumed
         response = self.responses[min(self.calls, len(self.responses) - 1)]
         self.calls += 1
         return response
@@ -153,10 +159,10 @@ async def test_unknown_tool_is_observed(tmp_path):
     assert "Unknown tool" in result.observations[0].error
 
 
-async def test_on_turn_sees_each_tool_call_and_the_final_report(tmp_path):
+async def test_on_turn_sees_each_tool_call_its_notes_and_the_final_report(tmp_path):
     spec = ToolSpec(name="probe", description="probes", parameters={})
     model = ScriptedModel(
-        ModelResponse(tool_calls=[ToolCall(tool_call_id="1", name="probe", arguments={})]),
+        ModelResponse(tool_calls=[ToolCall(tool_call_id="1", name="probe", arguments={})], memory_update=NOTES),
         ModelResponse(report=REPORT),
     )
     events = []
@@ -167,7 +173,7 @@ async def test_on_turn_sees_each_tool_call_and_the_final_report(tmp_path):
     await loop.run(Objective(description="Test objective"), build_definition(tools=[spec]))
 
     kinds = [event["kind"] for event in events]
-    assert kinds == ["tool_calls", "report"]
+    assert kinds == ["tool_calls", "notes", "report"]
     assert events[0]["calls"][0].name == "probe"
 
 
@@ -288,3 +294,757 @@ async def test_a_report_with_no_recommended_actions_is_still_valid(tmp_path):
     result = await run_with_evidence(tmp_path, report(FINDING), "E1")
 
     assert result.recommended_actions == []
+
+
+async def test_a_report_does_not_discard_a_capability_call_in_the_same_turn(tmp_path):
+    spec = ToolSpec(name="probe", description="d", parameters={})
+    executed = []
+
+    async def executor(name, arguments):
+        executed.append(name)
+        return {"status": "ok"}
+
+    model = ScriptedModel(
+        ModelResponse(
+            tool_calls=[ToolCall(tool_call_id="1", name="probe", arguments={})],
+            report=REPORT,
+            memory_update={"understanding": "u"},
+        )
+    )
+    loop = build_loop(model, tmp_path, tools=[spec], executor=executor)
+
+    result = await loop.run(Objective(description="Test objective"), build_definition(tools=[spec]))
+
+    assert executed == ["probe"]
+    assert result.completion_reason == "reported"
+    assert result.metadata["tool_calls"] == 1
+
+
+# --- U4: narrative validation, merge and the rejection bound.
+
+PROBE = ToolSpec(name="probe", description="d", parameters={})
+CALL = ToolCall(tool_call_id="1", name="probe", arguments={})
+# Different arguments, so the harness runs it rather than refusing a rerun.
+NEXT_CALL = ToolCall(tool_call_id="2", name="probe", arguments={"page": 2})
+
+
+def hypothesis(id="H1", **fields):
+    return {"id": id, "statement": "packed", "confidence": 0.6, "status": "open", **fields}
+
+
+def notes(**fields):
+    return {**NOTES, **fields}
+
+
+def counting_executor():
+    calls = []
+
+    def executor(name, arguments):
+        calls.append(name)
+        return {"status": "ok"}
+
+    return calls, executor
+
+
+async def run_loop(tmp_path, *responses, evidence=None):
+    calls, executor = counting_executor()
+    loop = build_loop(ScriptedModel(*responses), tmp_path, tools=[PROBE], executor=executor)
+    result = await loop.run(
+        Objective(description="o"), build_definition(tools=[PROBE]), evidence=evidence
+    )
+    return loop, result, calls
+
+
+async def memory_after(tmp_path, *updates):
+    """Run one capability turn per update, then report; return the final memory."""
+    responses = [ModelResponse(tool_calls=[CALL], memory_update=update) for update in updates]
+    responses.append(ModelResponse(report=REPORT))
+    calls, executor = counting_executor()
+    loop = build_loop(ScriptedModel(*responses), tmp_path, tools=[PROBE], executor=executor)
+    captured = {}
+    original = loop._merge_narrative
+
+    def spy(state, update):
+        captured["state"] = state
+        return original(state, update)
+
+    loop._merge_narrative = spy
+    await loop.run(Objective(description="o"), build_definition(tools=[PROBE]))
+    return captured["state"].working_memory
+
+
+async def test_a_well_formed_narrative_merges_into_the_memory(tmp_path):
+    memory = await memory_after(
+        tmp_path, notes(understanding="looks packed", hypotheses=[hypothesis()],
+                        open_questions=[{"id": "Q1", "question": "is it packed?"}])
+    )
+
+    assert memory.understanding == "looks packed"
+    assert [h.id for h in memory.hypotheses] == ["H1"]
+    assert [q.id for q in memory.open_questions] == ["Q1"]
+
+
+async def test_a_status_differing_in_case_or_whitespace_is_coerced(tmp_path):
+    memory = await memory_after(tmp_path, notes(hypotheses=[hypothesis(status="  Supported ")]))
+
+    assert memory.hypotheses[0].status == "supported"
+
+
+async def test_a_missing_narrative_is_rejected_and_the_reason_reaches_the_model(tmp_path):
+    loop, result, calls = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update=NOTES),
+        ModelResponse(tool_calls=[NEXT_CALL]),
+        ModelResponse(report=REPORT),
+    )
+
+    rejected = [o.error for o in result.observations if o.error]
+    assert len(rejected) == 1
+    assert rejected[0].startswith("Notes rejected: record_memory is required on every turn that calls a capability")
+    assert calls == ["probe", "probe"]
+
+
+async def test_the_first_capability_turn_owes_no_notes(tmp_path):
+    """Notes reflect results through the previous turn; turn 1 has none."""
+    loop, result, calls = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL]),
+        ModelResponse(report=REPORT),
+    )
+
+    assert loop.completion.memory_rejections == 0
+    assert result.completion_reason == "reported"
+    assert calls == ["probe"]
+
+
+async def test_a_missing_field_means_no_change_and_a_malformed_one_is_named(tmp_path):
+    """A live model's forced notes omitted fields it had nothing new for."""
+    partial = {"understanding": "Packed.", "hypotheses": [hypothesis()]}
+    loop, result, _ = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update=partial),
+        ModelResponse(memory_update={"candidates": "not a list"}),
+        ModelResponse(report=REPORT),
+    )
+
+    assert loop.completion.memory_rejections == 1
+    assert [o.error for o in result.observations if o.error] == ["Notes rejected: candidates must be an array"]
+
+
+async def test_a_rejected_narrative_keeps_the_capability_result_and_does_not_rerun_it(tmp_path):
+    _, result, calls = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update={"hypotheses": "not a list"}),
+        ModelResponse(report=REPORT),
+    )
+
+    assert calls == ["probe"]
+    assert result.observations[0].success
+    assert result.metadata["tool_calls"] == 1
+
+
+async def test_a_valid_report_survives_a_malformed_narrative(tmp_path):
+    _, result, _ = await run_loop(
+        tmp_path, ModelResponse(report=REPORT, memory_update={"hypotheses": "not a list"})
+    )
+
+    assert result.completion_reason == "reported"
+
+
+async def test_a_narrative_leaves_unmentioned_hypotheses_alone(tmp_path):
+    memory = await memory_after(
+        tmp_path,
+        notes(hypotheses=[hypothesis("H1"), hypothesis("H2", statement="injects")]),
+        notes(hypotheses=[{"id": "H2", "confidence": 0.9}]),
+    )
+
+    by_id = {h.id: h for h in memory.hypotheses}
+    assert by_id["H1"].confidence == 0.6
+    assert by_id["H2"].confidence == 0.9 and by_id["H2"].statement == "injects"
+
+
+async def test_closing_by_identifier_removes_an_entry(tmp_path):
+    memory = await memory_after(
+        tmp_path, notes(hypotheses=[hypothesis()]), notes(close=["H1"])
+    )
+
+    assert memory.hypotheses == []
+
+
+def test_closing_an_unknown_identifier_is_dropped_and_the_rest_of_the_notes_kept():
+    """Like an unknown evidence id: a live run lost a whole notes update, and
+    then the run, to one close of a question it never created."""
+    from mira.reasoning.contracts.memory import WorkingMemory
+    from mira.reasoning.runtime.narrative import apply_narrative
+
+    memory = WorkingMemory()
+    assert apply_narrative(memory, notes(hypotheses=[hypothesis()]), []) == ("", [])
+
+    failure, warnings = apply_narrative(
+        memory, notes(understanding="packed?", hypotheses=[hypothesis("H2")], close=["H9", "H1"]), []
+    )
+
+    assert failure == ""
+    assert any("H9" in warning for warning in warnings)
+    assert [h.id for h in memory.hypotheses] == ["H2"]  # H1 was closed, H9 never existed
+    assert memory.understanding == "packed?"
+
+
+class RecordingModel(ScriptedModel):
+    def __init__(self, *responses):
+        super().__init__(*responses)
+        self.contexts = []
+
+    def generate(self, context, tools, force=None):
+        self.contexts.append(context)
+        return super().generate(context, tools, force)
+
+
+async def notes_citing(tmp_path, *refs):
+    update = notes(understanding="u", hypotheses=[hypothesis(supporting_evidence=list(refs))])
+    model = RecordingModel(ModelResponse(tool_calls=[CALL], memory_update=update), ModelResponse(report=REPORT))
+    calls, executor = counting_executor()
+    loop = build_loop(model, tmp_path, tools=[PROBE], executor=executor)
+    result = await loop.run(Objective(description="o"), build_definition(tools=[PROBE]), evidence=gathered("E1"))
+    return loop, result, model.contexts
+
+
+async def test_an_unknown_evidence_id_is_dropped_and_the_rest_of_the_notes_kept(tmp_path):
+    loop, result, contexts = await notes_citing(tmp_path, "E1", "E99")
+
+    (kept,) = result.memory.hypotheses
+    assert kept.supporting_evidence == ["E1"] and result.memory.understanding == "u"
+    assert "E99" in contexts[1] and "dropped" in contexts[1]
+    assert loop.completion.memory_rejections == 0
+
+
+async def test_a_hypothesis_citing_only_unknown_evidence_is_kept_unsupported(tmp_path):
+    loop, result, contexts = await notes_citing(tmp_path, "E98", "E99")
+
+    (kept,) = result.memory.hypotheses
+    assert kept.supporting_evidence == []
+    assert "E98, E99" in contexts[1]
+    assert loop.completion.memory_rejections == 0
+
+
+async def test_empty_collections_are_accepted_and_change_nothing(tmp_path):
+    memory = await memory_after(tmp_path, notes(hypotheses=[hypothesis()]), notes())
+
+    assert [h.id for h in memory.hypotheses] == ["H1"]
+
+
+async def test_alternating_rejected_and_accepted_narratives_still_terminate(tmp_path):
+    good = ModelResponse(tool_calls=[CALL], memory_update=NOTES)
+    bad = ModelResponse(tool_calls=[CALL], memory_update={"hypotheses": "not a list"})
+    model = ScriptedModel(bad, good, bad, good, bad, good, bad, good)
+    calls, executor = counting_executor()
+    loop = build_loop(model, tmp_path, tools=[PROBE], executor=executor)
+
+    result = await loop.run(Objective(description="o"), build_definition(tools=[PROBE]))
+
+    assert result.completion_reason == "degraded"
+    assert result.metadata["turns"] < 10
+
+
+async def test_rejections_do_not_spend_the_capability_budget(tmp_path):
+    _, result, _ = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update={"hypotheses": "not a list"}),
+        ModelResponse(report=REPORT),
+    )
+
+    assert result.metadata["tool_calls"] == 1
+    assert len([o for o in result.observations]) == 2
+
+
+async def test_an_identical_call_is_not_rerun_but_new_arguments_are(tmp_path):
+    other = ToolCall(tool_call_id="2", name="probe", arguments={"offset": 4})
+    _, result, calls = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update=NOTES),
+        ModelResponse(tool_calls=[CALL, other], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+
+    assert calls == ["probe", "probe"]
+    assert result.metadata["tool_calls"] == 2
+    assert "Not rerun" in result.observations[1].error
+
+
+async def test_a_rejection_is_announced_to_the_observer(tmp_path):
+    events = []
+    calls, executor = counting_executor()
+    loop = build_loop(
+        ScriptedModel(
+            ModelResponse(tool_calls=[CALL], memory_update=NOTES),
+            ModelResponse(tool_calls=[NEXT_CALL]),
+            ModelResponse(report=REPORT),
+        ),
+        tmp_path, tools=[PROBE], executor=executor, on_turn=events.append,
+    )
+
+    await loop.run(Objective(description="o"), build_definition(tools=[PROBE]))
+
+    assert [e["kind"] for e in events] == ["tool_calls", "notes", "tool_calls", "memory_rejected", "report"]
+
+
+# --- Run counters feed the benchmark (R19) -------------------------------
+
+
+def recall_probe(**arguments):
+    handle = "test#probe#0"
+    return ToolCall(tool_call_id="r", name="recall_observation", arguments={"handle": handle, **arguments})
+
+
+async def test_counters_report_model_calls_and_recalls(tmp_path):
+    _, result, _ = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL, NEXT_CALL], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_probe()]),
+        ModelResponse(report=REPORT),
+    )
+
+    assert result.metadata["model_calls"] == 3
+    assert result.metadata["recalls_requested"] == 1
+    assert result.metadata["repeat_recalls"] == 0
+
+
+async def test_a_forced_notes_call_counts_as_a_model_call_without_usage(tmp_path):
+    _, result, _ = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update=NOTES),
+        ModelResponse(tool_calls=[NEXT_CALL]),  # owes notes: one forced call, declined
+        ModelResponse(report=REPORT),
+    )
+
+    assert result.metadata["model_calls"] == 4
+    assert result.metadata["total_tokens"] == 0
+
+
+async def test_an_identical_recall_is_counted_as_a_repeat(tmp_path):
+    _, result, _ = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_probe()]),
+        ModelResponse(tool_calls=[recall_probe()], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+
+    assert result.metadata["recalls_requested"] == 2
+    assert result.metadata["repeat_recalls"] == 1
+
+
+async def test_a_refused_rerun_is_counted(tmp_path):
+    _, result, _ = await run_loop(
+        tmp_path,
+        ModelResponse(tool_calls=[CALL], memory_update=NOTES),
+        ModelResponse(tool_calls=[CALL], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+
+    assert result.metadata["reruns_refused"] == 1
+
+
+async def test_a_salvaged_report_counts_its_discarded_findings(tmp_path):
+    unsupported = {**FINDING, "evidence_refs": ["E99"]}
+    salvaged = json.dumps({"summary": "s", "verdict": "inconclusive", "findings": [FINDING, unsupported]})
+    calls, executor = counting_executor()
+    loop = build_loop(
+        ScriptedModel(ModelResponse(tool_calls=[CALL], memory_update=NOTES), ModelResponse(report=salvaged)),
+        tmp_path, tools=[PROBE], executor=executor,
+    )
+
+    result = await loop.run(
+        Objective(description="o"), build_definition(tools=[PROBE], max_turns=1), evidence=gathered("E1")
+    )
+
+    assert len(result.findings) == 1
+    assert result.metadata["findings_discarded"] == 1
+
+
+# --- Retrieval ledger, repeats, and progress (KTD7-KTD9) ------------------
+
+from mira.reasoning.contracts.state import State
+from mira.reasoning.contracts.tool import ToolResult
+from mira.reasoning.runtime.loop import _recall
+from mira.reasoning.runtime.payload import recall_fingerprint
+
+IMPORTS_SPEC = ToolSpec(
+    name="list_imports", description="d",
+    parameters={"type": "object", "properties": {"offset": {"type": "integer", "default": 0}}},
+)
+
+
+def collected(fetched=412, total=412, offset=0):
+    metadata = {"capability": "list_imports", "offset": offset, "total": total,
+                "fetched": fetched, "unfetched": total - fetched, "has_more": offset + fetched < total}
+    if metadata["has_more"]:
+        metadata["next_offset"] = offset + fetched
+    rows = [{"dll": "KERNEL32.dll", "name": f"Fn{index}"} for index in range(offset, offset + fetched)]
+    return {"status": "ok", "data": {"imports": rows}, "metadata": metadata}
+
+
+def imports_call(id, **arguments):
+    return ToolCall(tool_call_id=id, name="list_imports", arguments=arguments)
+
+
+def recall_imports(**arguments):
+    return ToolCall(tool_call_id="r", name="recall_observation",
+                    arguments={"handle": "test#list_imports#0", "path": "data.imports", **arguments})
+
+
+async def run_imports(tmp_path, *responses, output=None, evidence=None):
+    calls = []
+
+    def executor(name, arguments):
+        calls.append(arguments)
+        return output or collected()
+
+    model = ScriptedModel(*responses)
+    loop = build_loop(model, tmp_path, tools=[IMPORTS_SPEC], executor=executor)
+    result = await loop.run(Objective(description="o"), build_definition(tools=[IMPORTS_SPEC]), evidence=evidence)
+    return loop, result, calls
+
+
+def test_a_fingerprint_ignores_argument_order_and_search_case():
+    one = recall_fingerprint({"handle": "h", "path": "data.imports", "contains": ["VirtualAlloc"]})
+    two = recall_fingerprint({"contains": ["virtualalloc "], "path": "data.imports", "handle": "h"})
+
+    assert one == two
+    assert one != recall_fingerprint({"handle": "h", "path": "data.imports", "contains": ["other"]})
+
+
+async def test_a_repeated_recall_is_served_again_from_storage_but_marked_a_repeat(tmp_path):
+    seen = []
+
+    class Watching(ScriptedModel):
+        def generate(self, context, tools, force=None):
+            seen.append(context)
+            return super().generate(context, tools, force)
+
+    model = Watching(
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(offset=0, limit=3)], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(limit=3, offset=0)], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+    loop = build_loop(model, tmp_path, tools=[IMPORTS_SPEC], executor=lambda name, arguments: collected())
+    result = await loop.run(Objective(description="o"), build_definition(tools=[IMPORTS_SPEC]))
+
+    assert "[0] " in seen[2]
+    assert "a repeat of turn 2's recall, served again from storage" in seen[3] and "[0] " in seen[3]
+    assert result.metadata["repeat_recalls"] == 1
+
+
+async def test_a_model_that_only_repeats_a_recall_ends_degraded_after_two_turns(tmp_path):
+    _, result, _ = await run_imports(
+        tmp_path,
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(limit=5)], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(limit=5)], memory_update=NOTES),
+    )
+
+    assert result.completion_reason == "degraded"
+    # A model looping on recalls is not silent, so it still gets the report-only
+    # turn (its scripted last response has no report, hence no report here).
+    assert result.metadata["turns"] == 5
+
+
+async def test_a_looping_model_that_is_still_talking_gets_a_final_report_turn(tmp_path):
+    loop_turn = ModelResponse(tool_calls=[recall_imports(limit=5)], memory_update=NOTES)
+    _, result, _ = await run_imports(
+        tmp_path,
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        loop_turn,  # turn 2 shows the slice; turns 3 and 4 repeat it, and the run degrades
+        loop_turn, loop_turn,
+        ModelResponse(report=REPORT),
+    )
+
+    assert result.completion_reason == "degraded"
+    assert result.summary == "test"  # the report-only turn's report, not the stock "stopped" message
+
+
+def test_a_recall_of_items_already_shown_is_served_but_is_not_progress():
+    state = State(objective=Objective(description="o"), run_id="test")
+    state.record_tool_call(imports_call("1"))
+    state.record_tool_result(ToolResult("1", success=True, output=collected()))
+
+    first, first_new = _recall(state, recall_imports(offset=0, limit=10).arguments)
+    again, again_new = _recall(state, recall_imports(where={"name": "Fn5"}).arguments)
+    later, later_new = _recall(state, recall_imports(offset=400).arguments)
+
+    assert first_new and "[9] " in first
+    assert not again_new and "[5] " in again
+    assert later_new
+    assert set(state.shown_items["test#list_imports#0"]["data.imports"]) == set(range(10)) | set(range(400, 412))
+
+
+async def test_a_refused_repeat_recall_owes_no_notes(tmp_path):
+    loop, result, _ = await run_imports(
+        tmp_path,
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(limit=5)], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(limit=5)]),  # a repeat: nothing new to note
+        ModelResponse(tool_calls=[imports_call("2", offset=500)], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+
+    assert loop.completion.memory_rejections == 0
+    assert result.metadata["model_calls"] == 5  # no forced notes call
+
+
+async def test_recalls_add_no_evidence(tmp_path):
+    _, result, _ = await run_imports(
+        tmp_path,
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(limit=5), recall_imports(group_by="dll")], memory_update=NOTES),
+        ModelResponse(report=report(FINDING)),
+        evidence=gathered("E1"),
+    )
+
+    assert result.evidence == ["E1"]
+
+
+async def test_a_call_equal_after_filling_defaults_is_not_rerun(tmp_path):
+    _, result, calls = await run_imports(
+        tmp_path,
+        ModelResponse(tool_calls=[imports_call("1", offset=0)], memory_update=NOTES),
+        ModelResponse(tool_calls=[imports_call("2")], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+
+    assert len(calls) == 1
+    assert result.metadata["reruns_refused"] == 1
+
+
+async def test_a_call_inside_a_collected_range_points_to_recall(tmp_path):
+    _, result, calls = await run_imports(
+        tmp_path,
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[imports_call("2", offset=300)], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+
+    assert len(calls) == 1
+    refusal = result.observations[1].error
+    assert "recall_observation" in refusal and "offset=300" in refusal and "test#list_imports#0" in refusal
+
+
+async def test_a_call_past_a_truncated_collection_runs(tmp_path):
+    _, _, calls = await run_imports(
+        tmp_path,
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[imports_call("2", offset=10_000)], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+        output=collected(fetched=10_000, total=12_000),
+    )
+
+    assert calls == [{}, {"offset": 10_000}]
+
+
+async def test_a_failed_call_is_retried_with_the_same_arguments(tmp_path):
+    outcomes = [RuntimeError("worker died"), collected()]
+
+    def executor(name, arguments):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    model = ScriptedModel(
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[imports_call("2")], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+    loop = build_loop(model, tmp_path, tools=[IMPORTS_SPEC], executor=executor)
+    result = await loop.run(Objective(description="o"), build_definition(tools=[IMPORTS_SPEC]))
+
+    assert outcomes == [] and result.metadata["tool_calls"] == 2
+
+
+# --- Review follow-ups: failed recalls, projected recalls -------------------
+
+
+def imports_state():
+    state = State(objective=Objective(description="o"), run_id="test")
+    state.record_tool_call(imports_call("1"))
+    state.record_tool_result(ToolResult("1", success=True, output=collected()))
+    return state
+
+
+def test_a_failed_recall_is_not_remembered_as_answered():
+    state = State(objective=Objective(description="o"), run_id="test")
+    asked = recall_imports(limit=5).arguments
+
+    before, _ = _recall(state, asked)  # the handle does not exist yet
+    state.record_tool_call(imports_call("1"))
+    state.record_tool_result(ToolResult("1", success=True, output=collected()))
+    after, new = _recall(state, asked)
+
+    assert "failed" in before
+    assert new and "[4] " in after and "already answered" not in after
+    assert state.repeat_recalls == 0
+
+
+def test_new_keys_of_items_already_shown_are_new():
+    state = imports_state()
+
+    _, names_new = _recall(state, recall_imports(limit=5, fields=["name"]).arguments)
+    _, dlls_new = _recall(state, recall_imports(limit=5, fields=["dll"]).arguments)
+    _, whole_new = _recall(state, recall_imports(limit=5).arguments)
+    _, again_new = _recall(state, recall_imports(limit=5, fields=["dll", "name"]).arguments)
+
+    assert names_new and dlls_new and whole_new
+    assert not again_new  # whole items already showed every key
+
+
+# --- A call's identity includes its non-paging arguments (U10) ---------------
+
+
+async def run_static(tmp_path, name, first, second, output):
+    from mira.agents.static.wiring import tool_manifest
+
+    spec = next(spec for spec in tool_manifest() if spec.name == name)
+    calls = []
+
+    def executor(name, arguments):
+        calls.append(arguments)
+        return output
+
+    model = ScriptedModel(
+        ModelResponse(tool_calls=[ToolCall("1", name, first)], memory_update=NOTES),
+        ModelResponse(tool_calls=[ToolCall("2", name, second)], memory_update=NOTES),
+        ModelResponse(report=REPORT),
+    )
+    loop = build_loop(model, tmp_path, tools=[spec], executor=executor)
+    await loop.run(Objective(description="o"), build_definition(tools=[spec]))
+    return calls
+
+
+def collected_page(key, count=40):
+    return {"status": "ok", "data": {key: [{"value": index} for index in range(count)]},
+            "metadata": {"offset": 0, "total": count, "fetched": count, "unfetched": 0, "has_more": False}}
+
+
+async def test_a_yara_scan_with_another_ruleset_is_a_separate_call(tmp_path):
+    calls = await run_static(tmp_path, "scan_yara", {"ruleset": "a"}, {"ruleset": "b", "offset": 10}, collected_page("matches"))
+
+    assert len(calls) == 2
+
+
+async def test_disassembly_at_another_address_is_a_separate_call(tmp_path):
+    calls = await run_static(
+        tmp_path, "disassemble_function", {"function_address": 4096}, {"function_address": 8192, "offset": 10},
+        collected_page("instructions"),
+    )
+
+    assert len(calls) == 2
+
+
+async def test_a_yara_scan_inside_its_collected_range_is_refused(tmp_path):
+    calls = await run_static(tmp_path, "scan_yara", {"ruleset": "a"}, {"ruleset": "a", "offset": 10}, collected_page("matches"))
+
+    assert len(calls) == 1
+
+
+# --- The verdict gate in the loop (KTD6) ---------------------------------
+
+
+def submitted(verdict, *refs, severity="high"):
+    return json.dumps({"summary": "s", "verdict": verdict, "findings": [{**FINDING, "severity": severity, "evidence_refs": list(refs)}]})
+
+
+def graded(id, capability="run_capa", confidence=0.9):
+    return Evidence(id=id, observation=f"observation {id}", source_agent="static", capability=capability, confidence=confidence)
+
+
+async def test_an_uncorroborated_malicious_report_is_rejected_and_a_revised_one_stands(tmp_path):
+    loop, result, _ = await run_loop(
+        tmp_path, ModelResponse(report=submitted("malicious", "E1")), ModelResponse(report=submitted("inconclusive", "E1")),
+        evidence=[graded("E1")],
+    )
+
+    assert result.completion_reason == "reported" and result.verdict == "inconclusive"
+    assert result.metadata["report_rejections"] == 1
+    assert "verdict_gate" not in result.metadata
+
+
+async def test_three_rejected_reports_end_the_run_with_one_report_only_turn(tmp_path):
+    model = ScriptedModel(ModelResponse(report=submitted("malicious", "E1")))
+    loop = build_loop(model, tmp_path)
+
+    result = await loop.run(Objective(description="o"), build_definition(), evidence=[graded("E1")])
+
+    assert result.completion_reason == "limit_reports"
+    assert model.calls == 4  # three rejected, then the final report-only turn
+    assert result.verdict == "inconclusive"
+    assert result.metadata["verdict_gate"]["submitted_verdict"] == "malicious"
+    assert result.metadata["verdict_gate"]["reasons"]
+    assert "Verdict gate" in result.summary
+
+
+async def test_a_final_turn_report_losing_a_finding_and_lacking_corroboration_is_inconclusive(tmp_path):
+    unsupported = {**FINDING, "evidence_refs": ["E99"]}
+    final = json.dumps({"summary": "s", "verdict": "malicious", "findings": [FINDING, unsupported]})
+    calls, executor = counting_executor()
+    loop = build_loop(
+        ScriptedModel(ModelResponse(tool_calls=[CALL], memory_update=NOTES), ModelResponse(report=final)),
+        tmp_path, tools=[PROBE], executor=executor,
+    )
+
+    # One turn, so the report arrives on the final report-only turn.
+    result = await loop.run(
+        Objective(description="o"), build_definition(tools=[PROBE], max_turns=1), evidence=[graded("E1")]
+    )
+
+    assert result.completion_reason == "limit_turns"
+    assert result.metadata["findings_discarded"] == 1
+    assert result.verdict == "inconclusive"
+    assert result.metadata["verdict_gate"]["submitted_verdict"] == "malicious"
+
+
+async def test_a_severity_above_its_cited_grade_is_lowered_and_counted(tmp_path):
+    _, result, _ = await run_loop(
+        tmp_path, ModelResponse(report=submitted("benign", "E1", severity="high")),
+        evidence=[graded("E1", confidence=0.4)],
+    )
+
+    assert result.findings[0].severity is Severity.LOW
+    assert result.metadata["severities_capped"] == 1
+
+
+async def test_every_submitted_report_reaches_the_trace_with_its_validation(tmp_path):
+    loop, result, _ = await run_loop(
+        tmp_path, ModelResponse(report="not json"), ModelResponse(report=submitted("malicious", "E1")),
+        ModelResponse(report=submitted("benign", "E1")),
+        evidence=[graded("E1"), graded("E2", "list_imports")],
+    )
+
+    turns = json.loads((tmp_path / "trace_test.json").read_text())
+    validations = [turn["validation"] for turn in turns if turn.get("validation")]
+    assert [record["outcome"] for record in validations] == ["rejected", "rejected", "accepted"]
+    assert validations[-1]["uncited_strong"] == ["E2"]
+
+
+async def test_the_last_turns_force_a_report_and_a_malformed_one_can_be_fixed(tmp_path):
+    """Live: a model told to report kept recalling to the limit, then its one
+    forced report came back as {"findings": []} and the run was lost."""
+    forced = []
+
+    class Recording(ScriptedModel):
+        def generate(self, context, tools, force=None):
+            if force != "record_memory":
+                forced.append(force)
+            return super().generate(context, tools, force)
+
+    model = Recording(
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(limit=5)], memory_update=NOTES),
+        ModelResponse(report='{"findings": []}'),
+        ModelResponse(report=REPORT),
+    )
+    loop = build_loop(model, tmp_path, tools=[IMPORTS_SPEC], executor=lambda name, arguments: collected())
+    result = await loop.run(Objective(description="o"), build_definition(tools=[IMPORTS_SPEC], max_turns=4))
+
+    assert forced == [None, None, "submit_report", "submit_report"]
+    assert result.summary == "test" and result.completion_reason != "limit_turns"

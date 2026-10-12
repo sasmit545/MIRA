@@ -39,7 +39,9 @@ class ScriptedModel:
         self.responses = list(responses)
         self.contexts = []
 
-    def generate(self, context, tools):
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()  # declines the forced notes call; the script is not consumed
         self.contexts.append(context)
         index = min(len(self.contexts) - 1, len(self.responses) - 1)
         return self.responses[index]
@@ -207,25 +209,51 @@ def build_high_volume_sample(directory):
     return sample
 
 
+H1 = "The sample embeds command-and-control infrastructure."
+
+
+def high_volume_notes(hypotheses, **fields):
+    return {"understanding": "", "hypotheses": hypotheses, "open_questions": [], "candidates": [], **fields}
+
+
 class HighVolumeModel:
-    """Calls the two highest-volume capabilities, then reports on what it saw."""
+    """Calls the two highest-volume capabilities, then file_info with notes
+    that leave H1 unmentioned, then reports on what it saw."""
 
     def __init__(self):
-        self.turn = 0
+        self.contexts = []
 
-    def generate(self, context, tools):
-        self.turn += 1
-        if self.turn == 1:
-            return ModelResponse(tool_calls=[
-                ToolCall(tool_call_id="1", name="extract_strings",
-                         arguments={"limit": 1000, "min_length": 4}),
-                ToolCall(tool_call_id="2", name="disassemble_function",
-                         arguments={"function_address": 0x1000, "limit": 1000}),
-            ])
+    def generate(self, context, tools, force=None):
+        if force == "record_memory":
+            return ModelResponse()  # declines the forced notes call; the script is not consumed
+        self.contexts.append(context)
         cited = re.findall(r"^\s+(E\d+) \[", context, re.MULTILINE)
+        if len(self.contexts) == 1:
+            return ModelResponse(
+                tool_calls=[
+                    ToolCall(tool_call_id="1", name="extract_strings",
+                             arguments={"limit": 1000, "min_length": 4}),
+                    ToolCall(tool_call_id="2", name="disassemble_function",
+                             arguments={"function_address": 0x1000, "limit": 1000}),
+                ],
+                memory_update=high_volume_notes(
+                    [{"id": "H1", "statement": H1, "confidence": 0.4, "status": "open"}],
+                    open_questions=[{"id": "Q1", "question": "Is the binary packed?"}],
+                ),
+            )
+        if len(self.contexts) == 2:
+            return ModelResponse(
+                tool_calls=[ToolCall(tool_call_id="3", name="file_info", arguments={})],
+                memory_update=high_volume_notes([{
+                    "id": "H2", "statement": "The URL table is a decoy.", "confidence": 0.2,
+                    "status": "weakened", "contradicting_evidence": cited[:1],
+                }]),
+            )
         return ModelResponse(report=json.dumps({
             "summary": "The sample embeds many command-and-control URLs.",
-            "verdict": "malicious",
+            # Its strong evidence comes from one capability, so the verdict
+            # gate would refuse malicious (KTD4); this run tests the message.
+            "verdict": "inconclusive",
             "findings": [{
                 "title": "Embedded command-and-control URLs",
                 "description": "The sample carries a large table of beacon URLs.",
@@ -240,10 +268,11 @@ class HighVolumeModel:
 async def run_high_volume(tmp_path):
     sample = build_high_volume_sample(tmp_path)
     client, artifact_id = build_client(sample)
-    agent = StaticAgent(client, model=HighVolumeModel(), trace_dir=tmp_path / "runs")
+    model = HighVolumeModel()
+    agent = StaticAgent(client, model=model, trace_dir=tmp_path / "runs")
     state = InvestigationState()
     message = await agent.investigate(HIGH_VOLUME_OBJECTIVE, artifact_id, state=state)
-    return message, state, tmp_path / "runs"
+    return message, state, tmp_path / "runs", model.contexts
 
 
 @pytest.fixture(scope="module")
@@ -271,7 +300,7 @@ def raw_outputs(trace_dir) -> list:
 def test_the_message_stays_within_its_budget(high_volume):
     """The return value sits in an orchestrator's context beside the findings
     of every prior specialist run, so its size cannot track its input's."""
-    message, _, _ = high_volume
+    message, *_ = high_volume
 
     serialized = serialize(message)
     assert len(serialized.encode()) < MESSAGE_BUDGET_BYTES, (
@@ -280,7 +309,7 @@ def test_the_message_stays_within_its_budget(high_volume):
 
 
 def test_no_raw_capability_output_reaches_the_message(high_volume):
-    message, _, trace_dir = high_volume
+    message, _, trace_dir, _ = high_volume
 
     serialized = serialize(message)
     needles = [
@@ -298,7 +327,7 @@ def test_no_raw_capability_output_reaches_the_message(high_volume):
 
 
 def test_every_evidence_reference_in_the_message_resolves(high_volume):
-    message, state, trace_dir = high_volume
+    message, state, trace_dir, _ = high_volume
 
     assert message.evidence_refs
     for reference in message.evidence_refs:
@@ -307,8 +336,59 @@ def test_every_evidence_reference_in_the_message_resolves(high_volume):
         assert resolve_observation(trace_dir, evidence.provenance) is not None
 
 
+# --- The model-facing boundary (U8) -----------------------------------------
+
+
+def test_no_raw_successful_payload_reaches_any_prompt(high_volume):
+    """Digests sample an array's ends, so the middle of every large array is
+    what must never appear: only a raw dump would carry it."""
+    _, _, trace_dir, contexts = high_volume
+
+    needles = [
+        json.dumps(value[len(value) // 2], default=str)
+        for output in raw_outputs(trace_dir)
+        for value in (output.get("data") or {}).values()
+        if isinstance(value, list) and len(value) > 8
+    ]
+    assert needles, "the run produced no large array to check against"
+    leaked = [needle for needle in needles for context in contexts if needle in context]
+    assert not leaked, f"raw capability output reached a prompt: {leaked}"
+
+
+def test_the_prompt_does_not_grow_with_result_size(high_volume):
+    _, _, trace_dir, contexts = high_volume
+
+    raw = sum(len(json.dumps(output, default=str)) for output in raw_outputs(trace_dir))
+    growth = max(len(context) for context in contexts) - len(contexts[0])
+    assert raw > 100_000
+    assert growth < 10_000, f"the prompt grew {growth} chars over {raw} chars of output"
+
+
+def test_a_hypothesis_left_unmentioned_carries_to_later_prompts(high_volume):
+    _, _, _, contexts = high_volume
+
+    first, second, third = contexts
+    assert H1 not in first
+    # Written on turn 1, unmentioned on turn 2, still there on turn 3.
+    assert H1 in second and H1 in third
+    assert "Is the binary packed?" in third
+
+
+def test_the_promoted_hypotheses_match_the_final_notes(high_volume):
+    message, state, _, _ = high_volume
+
+    assert [(h.id, h.statement, h.status) for h in state.hypotheses] == [
+        ("H1", H1, "open"),
+        ("H2", "The URL table is a decoy.", "weakened"),
+    ]
+    decoy = state.hypotheses[1]
+    assert decoy.contradicting_evidence
+    assert all(state.get_evidence_by_id(ref) for ref in decoy.contradicting_evidence)
+    assert "Is the binary packed?" in message.assessment
+
+
 def test_every_finding_carries_enum_severity_and_confidence(high_volume):
-    message, _, _ = high_volume
+    message, *_ = high_volume
 
     assert message.findings
     for finding in message.findings:
@@ -318,7 +398,7 @@ def test_every_finding_carries_enum_severity_and_confidence(high_volume):
 
 
 def test_the_message_carries_every_field_the_finding_payload_names(high_volume):
-    message, _, _ = high_volume
+    message, *_ = high_volume
 
     assert set(asdict(message)) == {
         "artifact_id",
@@ -346,3 +426,34 @@ def test_the_cli_still_reports_each_capability_as_it_runs(capsys):
     printed = capsys.readouterr().out
     assert "file_info" in printed
     assert "ok" in printed
+
+
+# --- Malformed input still yields a well-formed FINDING (U9) -----------------
+
+from support import ToolThenReportModel
+
+from mira.agents.base import InvestigationFinding
+from mira.reasoning.composition import build_run_id
+
+IMPORTS_OBJECTIVE = InvestigationObjective(
+    name="Assess imports",
+    description="Assess what the import table reveals.",
+    reason="test",
+    capabilities=("list_imports", "file_info"),
+)
+
+
+@pytest.mark.parametrize("content, parses", [(build_minimal_pe()[:300], True), (SAMPLE_BYTES, False)], ids=["truncated-pe", "not-a-pe"])
+async def test_malformed_input_yields_a_well_formed_finding(tmp_path, content, parses):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(content)
+    client, artifact_id = build_client(sample)
+    agent = StaticAgent(client, model=ToolThenReportModel("list_imports", "file_info"), trace_dir=tmp_path / "runs")
+
+    finding = await agent.investigate(IMPORTS_OBJECTIVE, artifact_id)
+
+    assert isinstance(finding, InvestigationFinding)
+    assert finding.assessment.split(":")[0] in {"inconclusive", "suspicious"}
+    imports = resolve_observation(tmp_path / "runs", f"{build_run_id(artifact_id, IMPORTS_OBJECTIVE.name)}#list_imports#0")
+    # pefile tolerates the truncation; the non-PE fails the capability, not the run.
+    assert imports["result"]["success"] is parses

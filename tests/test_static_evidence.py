@@ -6,13 +6,20 @@ is *named* in the sentence, not that a particular sentence was written.
 
 import pytest
 
+from support import PagedList, ToolThenReportModel
+
+from mira.agents.static.agent import StaticAgent
 from mira.agents.static.evidence import (
+    CONFIDENCE_WEAK,
     HIGH_REGION_ENTROPY,
     MAX_RULE_SIGNALS,
     PACKED_SECTION_ENTROPY,
     PAGED_CAPABILITIES,
     normalize,
 )
+from mira.core.objective import InvestigationObjective
+from mira.core.state import InvestigationState
+from mira.reasoning.runtime.trace import resolve_observation
 
 
 def ok(data: dict) -> dict:
@@ -191,16 +198,95 @@ def test_confidence_is_in_range_without_relying_on_the_clamp(capability, result,
         assert 0.0 <= signal.confidence <= 1.0
 
 
+def signalling(capability):
+    return next(result for name, result, _, _ in SIGNALS if name == capability)
+
+
 @pytest.mark.parametrize("capability", sorted(PAGED_CAPABILITIES))
-def test_paginated_evidence_says_it_covers_only_the_returned_page(capability):
-    result, expected = next(
-        (result, expected) for name, result, expected, _ in SIGNALS if name == capability
-    )
+def test_paginated_evidence_names_how_much_of_the_list_it_covers(capability):
+    result = {**signalling(capability), "metadata": {"offset": 0, "total": 500}}
+
     signals = normalize(capability, result, PRIOR)
 
     assert signals
     for signal in signals:
+        assert "of 500" in signal.observation and "fetched" in signal.observation
+
+
+@pytest.mark.parametrize("capability", sorted(PAGED_CAPABILITIES))
+def test_a_page_without_totals_claims_only_the_returned_page(capability):
+    for signal in normalize(capability, signalling(capability), PRIOR):
         assert "returned page" in signal.observation
+
+
+# --- Import evidence covers the whole collected list (R14, R16) ------------
+
+
+def imports_result(names, total=None, offset=0):
+    imports = [
+        {"dll": "kernel32.dll", "name": name, "ordinal": None if name else 7, "address": index}
+        for index, name in enumerate(names)
+    ]
+    total = len(imports) if total is None else total
+    return {"status": "ok", "data": {"imports": imports},
+            "metadata": {"offset": offset, "total": total, "fetched": len(imports), "unfetched": total - len(imports)}}
+
+
+def late_injection(count=2000, at=1500):
+    names = [f"Fn{index}" for index in range(count)]
+    names[at] = "VirtualAllocEx"
+    return names
+
+
+def test_an_import_deep_in_a_collected_list_is_evidence():
+    signals = normalize("list_imports", imports_result(late_injection()), {})
+
+    injection = [signal.observation for signal in signals if "process injection" in signal.observation]
+    assert injection and "VirtualAllocEx" in injection[0]
+    assert "among all 2000 imports" in injection[0]
+
+
+def test_a_truncated_list_names_what_was_fetched_and_the_total():
+    signals = normalize("list_imports", imports_result(["VirtualAllocEx", "Fn1"], total=8214), {})
+
+    assert "within the first 2 of 8214 imports fetched" in signals[0].observation
+
+
+def test_a_list_fetched_from_an_offset_says_where_it_starts():
+    signals = normalize("list_imports", imports_result(["VirtualAllocEx"], total=8214, offset=500), {})
+
+    assert "1 of 8214 imports fetched from offset 500" in signals[0].observation
+
+
+def test_nameless_imports_are_counted_as_ordinal_only():
+    signals = normalize("list_imports", imports_result([None, None, None, "GetTickCount"]), {})
+
+    assert len(signals) == 1
+    assert "3 of" in signals[0].observation and "ordinal" in signals[0].observation
+
+
+def test_run_time_api_resolution_is_weak_evidence():
+    signals = normalize("list_imports", imports_result(["GetProcAddress", "LoadLibraryA"]), {})
+
+    assert len(signals) == 1
+    assert "GetProcAddress" in signals[0].observation and "LoadLibraryA" in signals[0].observation
+    assert signals[0].confidence == CONFIDENCE_WEAK
+
+
+async def test_collected_evidence_resolves_to_the_collected_call(tmp_path):
+    imports = imports_result(late_injection())["data"]["imports"]
+    objective = InvestigationObjective(
+        name="Assess imports", description="d", reason="test", capabilities=("list_imports",)
+    )
+    agent = StaticAgent(PagedList(0, imports=imports), model=ToolThenReportModel("list_imports"), trace_dir=tmp_path)
+    state = InvestigationState()
+
+    await agent.investigate(objective, "sample-1", state=state)
+
+    item = next(item for item in state.evidence if "VirtualAllocEx" in item.observation)
+    observation = resolve_observation(tmp_path, item.provenance)
+    assert observation["call"]["name"] == "list_imports"
+    assert len(observation["result"]["output"]["data"]["imports"]) == 2000
 
 
 def test_each_yara_rule_match_is_its_own_evidence():
@@ -252,3 +338,186 @@ def test_entropy_thresholds_are_the_documented_knobs():
     """These are tuning knobs the signal table depends on, not literals."""
     assert PACKED_SECTION_ENTROPY <= 8.0
     assert HIGH_REGION_ENTROPY <= 8.0
+
+
+# --- Entropy windows reach the evidence (R15) ------------------------------
+
+
+def windows(high_at=()):
+    chunks = [{"offset": index * 64, "length": 64, "entropy": 7.6 if index in high_at else 3.0} for index in range(65)]
+    return ok({"entropy": 4.0, "offset": 0, "length": 65 * 64, "chunks": chunks})
+
+
+def test_high_entropy_windows_are_one_observation_with_their_offsets():
+    signals = normalize("calculate_entropy", windows(high_at=(3, 40)), {})
+
+    assert len(signals) == 1
+    assert "2 of 65" in signals[0].observation
+    assert "192" in signals[0].observation and "2560" in signals[0].observation
+
+
+def test_windows_and_region_below_the_threshold_are_silent():
+    assert normalize("calculate_entropy", windows(), {}) == []
+
+
+# --- False positives on a genuine Windows binary -----------------------------
+
+from mira.agents.static.evidence import CONFIDENCE_MODERATE, CONFIDENCE_RULE_MATCH
+
+
+def test_entry_point_only_discovery_says_nothing_about_function_density():
+    """The capability only reads the PE entry point, so one function in a
+    large file is its limitation, not a sign of packing."""
+    result = ok({"functions": [{"address": 1, "size": None, "name": "entry_point", "discovery_source": "pe_entry_point"}],
+                 "limitations": "Only the PE entry point is discovered without an analysis engine."})
+
+    assert normalize("list_functions", result, PRIOR) == []
+
+
+def capa(*namespaces):
+    return ok({"findings": [{"rule_id": f"rule {index}", "namespace": namespace, "meta": {}}
+                            for index, namespace in enumerate(namespaces)]})
+
+
+@pytest.mark.parametrize("namespace, confidence", [
+    ("anti-analysis/anti-debugging/debugger-detection", CONFIDENCE_RULE_MATCH),
+    ("persistence/registry/run", CONFIDENCE_RULE_MATCH),
+    ("collection/keylog", CONFIDENCE_MODERATE),
+    ("host-interaction/file-system/delete", CONFIDENCE_WEAK),
+    (None, CONFIDENCE_WEAK),
+])
+def test_a_capa_hit_is_graded_by_its_namespace(namespace, confidence):
+    (signal,) = normalize("run_capa", capa(namespace), PRIOR)
+
+    assert signal.confidence == confidence
+
+
+def test_an_ordinary_capability_says_benign_software_has_it_too():
+    (weak,) = normalize("run_capa", capa("host-interaction/file-system/delete"), PRIOR)
+    (strong,) = normalize("run_capa", capa("anti-analysis/anti-vm"), PRIOR)
+
+    assert "benign software" in weak.observation
+    assert "benign software" not in strong.observation
+
+
+def test_the_strongest_capa_hits_are_named_before_the_cap():
+    ordinary = ["host-interaction/file-system"] * (MAX_RULE_SIGNALS + 5)
+    result = capa(*ordinary, "anti-analysis/anti-debugging", "impact/wipe-disk")
+
+    signals = normalize("run_capa", result, PRIOR)
+
+    named = signals[:MAX_RULE_SIGNALS]
+    assert sum(signal.confidence == CONFIDENCE_RULE_MATCH for signal in named) == 2
+    assert signals[-1].confidence == CONFIDENCE_WEAK  # the remainder is only ordinary hits
+
+
+# --- Calibrated on 2,111 System32 binaries (October 2026) --------------------
+
+
+@pytest.mark.parametrize("name", ["fothk", ".00cfg", "GFIDS", ".imrsiv", "INIT"])
+def test_sections_the_microsoft_toolchain_emits_are_not_flagged(name):
+    assert normalize("analyze_pe", ok({"sections": [section(name=name)]}), {}) == []
+
+
+def imports_named(*names):
+    return ok({"imports": [{"dll": "kernel32.dll", "name": name, "address": index} for index, name in enumerate(names)]})
+
+
+def test_debugger_checks_the_c_runtime_makes_are_weak_and_say_so():
+    (signal,) = normalize("list_imports", imports_named("IsDebuggerPresent", "OutputDebugStringW"), {})
+
+    assert signal.confidence == CONFIDENCE_WEAK
+    assert "C runtime" in signal.observation and "IsDebuggerPresent" in signal.observation
+
+
+def test_a_rarer_debugger_check_is_still_strong_anti_debugging_evidence():
+    from mira.agents.static.evidence import CONFIDENCE_STRONG
+
+    (signal,) = normalize("list_imports", imports_named("CheckRemoteDebuggerPresent"), {})
+
+    assert signal.confidence == CONFIDENCE_STRONG and "anti-debugging" in signal.observation
+
+
+def test_run_time_resolution_says_most_programs_import_it():
+    (signal,) = normalize("list_imports", imports_named("GetProcAddress"), {})
+
+    assert "most Windows programs" in signal.observation
+
+
+# --- Rule keys for the signal survey (KTD9) ----------------------------------
+
+
+@pytest.mark.parametrize("capability,result,_expected,_clean", SIGNALS)
+def test_every_signal_names_a_stable_rule(capability, result, _expected, _clean):
+    first, second = normalize(capability, result, PRIOR), normalize(capability, result, PRIOR)
+
+    assert first
+    for signal in first:
+        assert ":" in signal.rule and signal.rule.split(":", 1)[1]
+    assert [signal.rule for signal in first] == [signal.rule for signal in second]
+
+
+def test_different_categories_get_different_rules():
+    imports = normalize("list_imports", imports_result(["IsDebuggerPresent", "VirtualAllocEx", "GetProcAddress", None]), {})
+    strings = normalize("extract_strings", ok({"strings": [
+        {"value": "http://a.example/x"}, {"value": "HKLM\Software\Run"}, {"value": "10.0.0.1"},
+    ]}), {})
+    sections = normalize("analyze_pe", ok({"sections": [section(name="UPX0", entropy=7.9)]}), {})
+    capa_hits = normalize("run_capa", capa("anti-analysis/anti-vm", "anti-analysis/anti-vm"), PRIOR)
+
+    for signals, count in ((imports, 4), (strings, 3), (sections, 2), (capa_hits, 2)):
+        assert len({signal.rule for signal in signals}) == count
+    assert {"strings:URL", "section:high-entropy", "section:nonstandard-name"} <= {
+        signal.rule for signal in strings + sections
+    }
+    assert {signal.rule for signal in capa_hits} == {"capa:rule 0", "capa:rule 1"}
+
+
+def test_a_yara_rule_is_keyed_by_namespace_and_rule():
+    (signal,) = normalize("scan_yara", ok({"matches": [{"rule": "Emotet_Loader", "namespace": "default", "tags": []}]}), PRIOR)
+
+    assert signal.rule == "yara:default/Emotet_Loader"
+
+
+def test_hits_past_the_cap_share_one_remainder_rule():
+    result = ok({"matches": [{"rule": f"Rule_{n}", "namespace": "n", "tags": []} for n in range(30)]})
+
+    assert normalize("scan_yara", result, PRIOR)[-1].rule == "yara:remainder"
+
+
+# --- One definition of each grade (KTD1) -------------------------------------
+
+
+@pytest.mark.parametrize("confidence, expected", [
+    (0.4, "weak"), (0.59, "weak"), (0.6, "moderate"), (0.79, "moderate"), (0.8, "strong"), (1.0, "strong"),
+])
+def test_confidence_bands(confidence, expected):
+    from mira.core.evidence import grade
+
+    assert grade(confidence) == expected
+
+
+def test_static_confidence_constants_fall_in_the_band_their_names_imply():
+    from mira.agents.static.evidence import BASE_CONFIDENCE, CONFIDENCE_STRONG
+    from mira.core.evidence import grade
+
+    assert grade(CONFIDENCE_STRONG) == grade(CONFIDENCE_RULE_MATCH) == "strong"
+    assert grade(CONFIDENCE_MODERATE) == "moderate"
+    assert grade(CONFIDENCE_WEAK) == grade(BASE_CONFIDENCE) == "weak"
+
+
+# --- Entropy and packing support a finding but never corroborate one --------
+
+
+def test_entropy_and_packing_signals_are_supporting_and_strong_rules_are_not():
+    supporting = [
+        *normalize("calculate_entropy", windows(high_at=(3,)), {}),
+        *normalize("file_info", ok({"entropy": 7.9, "file_type": "pe"}), {}),
+        *normalize("analyze_pe", ok({"sections": [{"name": ".text", "entropy": 7.9}]}), {}),
+        *normalize("detect_packer", ok({"packed": True, "packer": "UPX", "confidence": 0.9}), {}),
+        *normalize("run_capa", capa("anti-analysis/packer/upx"), {}),
+    ]
+    corroborating = normalize("run_capa", capa("anti-analysis/anti-debugging/debugger-detection"), {})
+
+    assert len(supporting) == 5 and all(signal.supporting for signal in supporting)
+    assert corroborating and not any(signal.supporting for signal in corroborating)

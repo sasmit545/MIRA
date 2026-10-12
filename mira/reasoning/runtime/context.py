@@ -5,11 +5,12 @@ This is the only place model-facing text is assembled.
 
 from typing import Any
 
-from ..contracts.state import State
-from ..contracts.tool import ToolResult
-from ..definition.instructions import assemble_instructions
+from mira.core.evidence import grade
 
-MAX_OBSERVATION_CHARS = 2000
+from ..contracts.state import State
+from ..definition.instructions import assemble_instructions
+from .payload import MAX_OBSERVATION_CHARS, truncate  # noqa: F401 - re-exported
+from .trace import capability_history
 
 
 class ContextBuilder:
@@ -22,35 +23,72 @@ class ContextBuilder:
             objective=state.objective.description,
             scope=agent_definition.scope,
             available_tools=list(agent_definition.allowed_tools),
-            current_state=render_state(state),
+            current_state=render_state(state, agent_definition.max_turns),
         )
 
 
-def render_state(state: State) -> str:
-    """Render counters, investigation history, and findings for the prompt."""
+# From this many turns left, the prompt tells the model to report now: a run
+# that hits the limit gets one report-only turn, after its budget is spent.
+WRAP_UP_TURNS = 2
+
+
+def render_state(state: State, max_turns: int) -> str:
+    """Render counters, capability history, and findings for the prompt.
+
+    A successful call is shown as its digest, never its raw payload: the full
+    result stays in the observation log, reachable through its handle.
+    """
     lines = [
-        f"Turn: {state.turn_count}",
+        f"Turn: {state.turn_count} of {max_turns}",
         f"Tool calls so far: {state.tool_call_count}",
         "",
-        "Investigation history:",
+        *render_memory(state),
+        "",
+        "Capability history (handle, call, outcome):",
     ]
     if not state.observations:
         lines.append("  (no tools have been called yet)")
-    for index, observation in enumerate(state.observations):
+    history = iter(capability_history(state))
+    for observation in state.observations:
         call = observation["call"]
         arguments = ", ".join(f"{name}={value!r}" for name, value in call.arguments.items())
-        lines.append(f"  [{index}] {call.name}({arguments})")
-        lines.append(f"      -> {_render_result(observation['result'])}")
+        if observation.get("harness"):
+            # Harness notes (a rejected report or notes, a skipped repeat) carry
+            # no handle: nothing ran, so there is nothing to recall.
+            result = observation["result"]
+            lines.append(f"  - {call.name}({arguments})")
+            lines.append(f"      -> ERROR: {result.error}")
+            continue
+        record = next(history, None)
+        if record is None:  # a call whose result has not arrived yet
+            continue
+        lines.append(f"  [{record.handle}] {record.name}({arguments})")
+        if not record.success:
+            lines.append(f"      -> ERROR: {record.error}")
+            continue
+        if record.evidence:
+            lines.append(f"      -> evidence: {', '.join(record.evidence)}")
+        for line in record.digest.splitlines():
+            lines.append(f"      | {line}")
+        lines.extend(f"      -> {line}" for line in record.shown)
+
+    if state.recalled:
+        lines.append("")
+        lines.append("Recalled this turn (shown once; keep what matters in record_memory):")
+        for answer in state.recalled:
+            lines.extend(f"  {line}" for line in answer.splitlines())
 
     if state.evidence:
         # The model is required to cite these identifiers in its findings, so
-        # it has to be shown them. The observation is a sentence; the raw
-        # result it came from stays in the history above and in the trace.
+        # it has to be shown them.
         lines.append("")
         lines.append("Evidence gathered so far (cite these identifiers in your findings):")
+        # The grade word, not the number: the model must know which items the
+        # verdict rules count, and a number invites false precision (KTD8).
         for evidence in state.evidence:
+            supporting = "" if evidence.corroborates else ", supporting only"
             lines.append(
-                f"  {evidence.id} [{evidence.capability}] {evidence.observation}"
+                f"  {evidence.id} [{evidence.capability}, {grade(evidence.confidence)}{supporting}] {evidence.observation}"
             )
 
     if state.findings:
@@ -58,19 +96,54 @@ def render_state(state: State) -> str:
         lines.append("Findings so far:")
         for finding in state.findings:
             lines.append(f"  - {finding.title}: {finding.description}")
+
+    # Last, where a model weighs it most: the rule the live run saw dropped
+    # under a long prompt.
+    lines.append("")
+    left = max_turns - state.turn_count
+    if left <= WRAP_UP_TURNS:
+        # Live runs read 'Turn: N' and kept exploring until the limit cut them off.
+        lines.append(
+            f"Only {left} turn{'' if left == 1 else 's'} left, and only submit_report is available. "
+            "Call it now with a summary, a verdict and your findings from the evidence you have; "
+            "inconclusive is a sound verdict when it does not settle the question."
+        )
+    lines.append(
+        "Reminder: any response that calls a capability must also call record_memory "
+        "(empty lists are fine; a turn that recalls may defer them one turn), "
+        "and so must the turn after a recall."
+    )
     return "\n".join(lines)
 
 
-def _render_result(result: ToolResult | None) -> str:
-    if result is None:
-        return "(pending)"
-    if not result.success:
-        return f"ERROR: {result.error}"
-    return truncate(repr(result.output))
+def render_memory(state: State) -> list:
+    """The model's own notes, as it last recorded them. Never filled in by the
+    harness: an empty notebook says so rather than implying conclusions."""
+    memory = state.working_memory
+    lines = ["Your working notes (from record_memory):"]
+    if not (memory.understanding or memory.hypotheses or memory.open_questions or memory.candidates):
+        lines.append("  (none recorded yet)")
+        return lines
 
-
-def truncate(text: str, limit: int = MAX_OBSERVATION_CHARS) -> str:
-    """Cap a rendered payload so one tool result cannot fill the context window."""
-    if len(text) <= limit:
-        return text
-    return f"{text[:limit]}... [truncated, {len(text) - limit} more characters]"
+    lines.append(f"  Understanding: {memory.understanding or '(none stated)'}")
+    if memory.hypotheses:
+        lines.append("  Hypotheses:")
+        for hypothesis in memory.hypotheses:
+            lines.append(
+                f"    {hypothesis.id} [{hypothesis.status}, confidence {hypothesis.confidence:.2f}] {hypothesis.statement}"
+            )
+            if hypothesis.supporting_evidence:
+                lines.append(f"      supported by: {', '.join(hypothesis.supporting_evidence)}")
+            if hypothesis.contradicting_evidence:
+                lines.append(f"      weakened by: {', '.join(hypothesis.contradicting_evidence)}")
+            if hypothesis.unknowns:
+                lines.append(f"      unknowns: {hypothesis.unknowns}")
+    if memory.open_questions:
+        lines.append("  Open questions:")
+        lines.extend(f"    {question.id} {question.question}" for question in memory.open_questions)
+    if memory.candidates:
+        lines.append("  Candidate next investigations:")
+        for candidate in memory.candidates:
+            reason = f" ({candidate.reason})" if candidate.reason else ""
+            lines.append(f"    {candidate.id} {candidate.investigation}{reason}")
+    return lines

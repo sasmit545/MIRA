@@ -1,22 +1,52 @@
 """YARA scanning against configured rule sets only."""
 
+import difflib
 from pathlib import Path
 
 from mira.core.artifact import Artifact
 from mira.capabilities.static.common import is_pe, paginate, result_error, result_ok
 
 
-def scan_yara(artifact: Artifact, *, ruleset: str, limit: int = 100, offset: int = 0, rulesets: dict[str, Path] | None = None) -> dict:
+def _ruleset_hint(asked: str, names: list[str]) -> str:
+    """Enough for a caller to pick a real name. Hundreds may be configured,
+    so name the closest ones, or the prefix families and a few examples."""
+    if not names:
+        return "no rulesets are configured"
+    close = difflib.get_close_matches(asked, names, n=5, cutoff=0.5)
+    if close:
+        return f"closest configured: {', '.join(close)}"
+    families = sorted({name.split("_", 1)[0] for name in names})
+    return (
+        f"{len(names)} are configured, named after their rule files by family "
+        f"({', '.join(families[:15])}), e.g. {', '.join(sorted(names)[:5])}"
+    )
+
+
+# Scans every configured rule set at once. Compiling all 751 signature-base
+# files together takes under two seconds, far less than a model turn spent
+# guessing one family name at a time.
+ALL_RULESETS = "all"
+
+
+def scan_yara(artifact: Artifact, *, ruleset: str = ALL_RULESETS, limit: int = 100, offset: int = 0, rulesets: dict[str, Path] | None = None) -> dict:
     configured_rulesets = rulesets or {}
-    rules_path = configured_rulesets.get(ruleset)
-    if rules_path is None:
-        return result_error(artifact.artifact_id, "scan_yara", "INVALID_INPUT", "ruleset is not configured")
+    if ruleset == ALL_RULESETS and configured_rulesets:
+        sources = {name: str(path) for name, path in configured_rulesets.items()}
+    elif ruleset in configured_rulesets:
+        sources = {ruleset: str(configured_rulesets[ruleset])}
+    else:
+        return result_error(
+            artifact.artifact_id, "scan_yara", "INVALID_INPUT",
+            f"ruleset {ruleset!r} is not configured; {_ruleset_hint(ruleset, list(configured_rulesets))}"
+            f"{f'; or pass {ALL_RULESETS!r} to scan every one' if configured_rulesets else ''}",
+        )
     try:
         import yara
     except ImportError:
         return result_error(artifact.artifact_id, "scan_yara", "TOOL_NOT_AVAILABLE", "yara-python is not installed")
     try:
-        compiled = yara.compile(filepath=str(rules_path), externals=_standard_externals(artifact))
+        # One namespace per rule file, so a match names the rule set it came from.
+        compiled = yara.compile(filepaths=sources, externals=_standard_externals(artifact))
         matches = compiled.match(str(artifact.path))
     except yara.Error as error:
         return result_error(artifact.artifact_id, "scan_yara", "ANALYSIS_FAILED", str(error))
