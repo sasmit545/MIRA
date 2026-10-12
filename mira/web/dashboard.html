@@ -12,30 +12,30 @@
    ========================================================================== */
 :root {
   /* surfaces */
-  --bg: #090912;
-  --sidebar: #0D0D1A;
-  --panel: #131324;
-  --panel-2: #19192F;
-  --well: #07070F;
-  --border: #30304D;
-  --text: #F1F0FF;
-  --text-2: #A6A6C5;
-  --text-3: #6E6E91;
+  --bg: #0f1114;
+  --sidebar: #121519;
+  --panel: #16191e;
+  --panel-2: #1b1f25;
+  --well: #0c0e11;
+  --border: #2b3038;
+  --text: #e4e7eb;
+  --text-2: #a1a8b2;
+  --text-3: #6c737d;
 
   /* palette */
-  --cyan: #38E8FF;
-  --purple: #A970FF;
-  --magenta: #FF4FD8;
-  --lime: #C6FF5C;
-  --amber: #FFBE55;
-  --coral: #FF6174;
-  --blue: #6585FF;
+  --cyan: #8aa6c9;
+  --purple: #8aa6c9;
+  --magenta: #8aa6c9;
+  --lime: #7bb88f;
+  --amber: #d4a656;
+  --coral: #d9737e;
+  --blue: #8aa6c9;
 
   /* navigation */
-  --nav-overview: var(--cyan);
-  --nav-runs: var(--purple);
-  --nav-new: var(--magenta);
-  --nav-trace: var(--amber);
+  --nav-overview: var(--text-2);
+  --nav-runs: var(--text-2);
+  --nav-new: var(--text-2);
+  --nav-trace: var(--text-2);
 
   /* lifecycle */
   --st-queued: var(--amber);
@@ -46,22 +46,22 @@
 
   /* agents */
   --ag-coordinator: var(--cyan);
-  --ag-static: var(--purple);
-  --ag-dynamic: var(--magenta);
-  --ag-forensics: var(--amber);
+  --ag-static: var(--text-2);
+  --ag-dynamic: var(--text-2);
+  --ag-forensics: var(--text-2);
 
   /* evidence */
-  --ev-pe: var(--purple);
-  --ev-meta: var(--cyan);
-  --ev-strings: var(--magenta);
+  --ev-pe: var(--text-3);
+  --ev-meta: var(--text-3);
+  --ev-strings: var(--text-3);
   --ev-warn: var(--amber);
   --ev-crit: var(--coral);
   --ev-done: var(--lime);
 
   /* terminal */
   --tm-sys: var(--cyan);
-  --tm-orch: var(--purple);
-  --tm-agent: var(--magenta);
+  --tm-orch: var(--text-2);
+  --tm-agent: var(--text-2);
   --tm-warn: var(--amber);
   --tm-err: var(--coral);
   --tm-ok: var(--lime);
@@ -78,9 +78,9 @@
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
 
   /* pixel effects */
-  --grid-line: rgba(101, 133, 255, .055);
+  --grid-line: transparent;
   --hard-shadow: 3px 3px 0 0 #000;
-  --scanline: rgba(255, 255, 255, .022);
+  --scanline: transparent;
 }
 
 * { box-sizing: border-box; }
@@ -118,9 +118,8 @@ svg.pxtext, svg.sprite { display: block; image-rendering: pixelated; flex: none;
 /* pixel focus ring: crisp outline + offset hard shadow */
 :focus { outline: none; }
 :focus-visible {
-  outline: 2px solid var(--magenta);
+  outline: 2px solid var(--cyan);
   outline-offset: 2px;
-  box-shadow: 4px 4px 0 0 rgba(255, 79, 216, .35);
 }
 
 .skip {
@@ -167,13 +166,12 @@ svg.pxtext, svg.sprite { display: block; image-rendering: pixelated; flex: none;
 .nav-btn[aria-current="page"] {
   color: var(--text);
   background: color-mix(in srgb, var(--c) 11%, transparent);
-  border-color: var(--c);
-  box-shadow: 0 0 16px -10px var(--c);
+  border-color: var(--border);
 }
 .nav-btn[aria-current="page"]::before {
   content: ""; position: absolute; left: -13px; top: 50%; transform: translateY(-50%);
   width: 4px; height: 20px;
-  background: linear-gradient(var(--cyan), var(--purple));
+  background: var(--cyan);
 }
 .nav-btn .nav-dot { margin-left: auto; width: 6px; height: 6px; background: var(--c); opacity: 0; }
 .nav-btn[aria-current="page"] .nav-dot { opacity: 1; }
@@ -183,7 +181,7 @@ svg.pxtext, svg.sprite { display: block; image-rendering: pixelated; flex: none;
   border: 1px dashed var(--border);
   font: 11px/1.5 var(--font-mono); color: var(--text-2);
 }
-.side-foot strong { color: var(--amber); font-weight: 600; letter-spacing: .08em; }
+.side-foot strong { color: var(--text); font-weight: 600; letter-spacing: .08em; }
 
 .main-col { min-width: 0; display: flex; flex-direction: column; }
 
@@ -191,11 +189,12 @@ svg.pxtext, svg.sprite { display: block; image-rendering: pixelated; flex: none;
   position: sticky; top: 0; z-index: 25;
   display: flex; align-items: center; justify-content: space-between; gap: var(--s4);
   padding: var(--s3) var(--s5);
-  background: rgba(9, 9, 18, .96);
+  background: color-mix(in srgb, var(--bg) 96%, transparent);
   border-bottom: 1px solid var(--border);
 }
 /* segmented strip: one segment per navigation colour */
 .topbar::after {
+  display: none;
   content: ""; position: absolute; left: 0; right: 0; bottom: -3px; height: 2px;
   background: linear-gradient(90deg,
     var(--nav-overview) 0 25%, var(--nav-runs) 25% 50%, var(--nav-new) 50% 75%, var(--nav-trace) 75% 100%);
@@ -286,14 +285,13 @@ main:focus { outline: none; }
 .btn-primary {
   border: 2px solid transparent;
   background:
-    linear-gradient(var(--panel-2), var(--panel-2)) padding-box,
-    linear-gradient(90deg, var(--cyan), var(--purple)) border-box;
-  box-shadow: var(--hard-shadow), 0 0 18px -8px var(--cyan);
+    var(--panel-2);
+  border-color: var(--cyan);
+  box-shadow: none;
 }
 .btn-primary:hover {
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--cyan) 20%, var(--panel-2)), color-mix(in srgb, var(--purple) 24%, var(--panel-2))) padding-box,
-    linear-gradient(90deg, var(--cyan), var(--magenta)) border-box;
+    color-mix(in srgb, var(--cyan) 14%, var(--panel-2));
 }
 .btn-primary .plus { color: var(--cyan); }
 
@@ -309,7 +307,7 @@ main:focus { outline: none; }
 
 /* status squares + chips */
 .sq { display: inline-block; width: 8px; height: 8px; background: var(--c, var(--text-3)); flex: none; }
-.sq.live { animation: blink 1s steps(2, jump-none) infinite; box-shadow: 0 0 8px var(--c); }
+.sq.live { animation: blink 1s steps(2, jump-none) infinite; }
 .chip {
   --c: var(--text-2);
   display: inline-flex; align-items: center; gap: 6px;
@@ -331,6 +329,7 @@ main:focus { outline: none; }
 .metric::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--c); }
 /* dithered corner patch */
 .metric::after {
+  display: none;
   content: ""; position: absolute; right: 0; top: 0; width: 72px; height: 40px;
   background: repeating-conic-gradient(color-mix(in srgb, var(--c) 30%, transparent) 0 25%, transparent 0 50%) 0 0 / 4px 4px;
   -webkit-mask: linear-gradient(225deg, #000, transparent 70%);
@@ -460,7 +459,7 @@ table.runs td { padding: 10px var(--s3); border-bottom: 1px solid var(--border);
 table.runs tr:last-child td { border-bottom: 0; }
 table.runs tbody tr { cursor: pointer; }
 table.runs tbody tr:hover td { background: color-mix(in srgb, var(--purple) 6%, transparent); }
-table.runs tbody tr[aria-selected="true"] td { background: linear-gradient(90deg, color-mix(in srgb, var(--magenta) 12%, transparent), color-mix(in srgb, var(--purple) 5%, transparent)); }
+table.runs tbody tr[aria-selected="true"] td { background: color-mix(in srgb, var(--cyan) 8%, transparent); }
 table.runs tbody tr[aria-selected="true"] td:first-child { box-shadow: inset 3px 0 0 var(--magenta); }
 .row-btn { background: none; border: 0; padding: 0; cursor: pointer; font: 600 12.5px var(--font-mono); color: var(--text); text-align: left; overflow-wrap: anywhere; }
 .row-btn:hover { color: var(--magenta); }
@@ -522,6 +521,25 @@ table.runs tbody tr[aria-selected="true"] td:first-child { box-shadow: inset 3px
 .more:hover { border-color: var(--blue); }
 
 /* ==========================================================================
+   Reasoning timeline — one card per turn, built from the event stream
+   ========================================================================== */
+.rs { max-height: 760px; overflow: auto; display: grid; gap: var(--s3); align-content: start; }
+.rs-step { --c: var(--purple); display: grid; gap: var(--s2); padding: var(--s3) 0; border-top: 1px dashed var(--border); }
+.rs-step:first-child { border-top: 0; padding-top: 0; }
+.rs-step:last-child { padding-bottom: 0; }
+.rs-lbl { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); font: 700 11px var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--c); }
+.rs-sub { margin-top: var(--s2); font: 700 10.5px var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--text-3); }
+.rs-list { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
+.rs-id { font: 700 11px var(--font-mono); color: var(--text-3); }
+.rs-args { color: var(--text-3); font-size: 11.5px; overflow-wrap: anywhere; }
+.rs-err { color: var(--coral); font-size: 11.5px; overflow-wrap: anywhere; }
+.hyp { --c: var(--purple); display: grid; gap: 4px; padding: var(--s2) var(--s3); background: var(--panel); border: 1px solid var(--border); border-left: 2px solid var(--c); font-size: 13px; }
+.hyp-hd { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); font: 12px var(--font-mono); }
+.hyp-ev { font: 11.5px/1.5 var(--font-mono); color: var(--text-3); overflow-wrap: anywhere; }
+.meter { width: 96px; height: 6px; background: var(--well); border: 1px solid var(--border); }
+.meter > i { display: block; height: 100%; background: var(--c); }
+
+/* ==========================================================================
    Notices, empty states, forms
    ========================================================================== */
 .notice { --c: var(--amber); padding: var(--s3) var(--s4); border: 1px solid color-mix(in srgb, var(--c) 45%, transparent); border-left: 3px solid var(--c); background: color-mix(in srgb, var(--c) 7%, var(--panel)); font-size: 13px; color: var(--text); }
@@ -538,28 +556,26 @@ table.runs tbody tr[aria-selected="true"] td:first-child { box-shadow: inset 3px
 .field { display: grid; gap: var(--s2); }
 .field-lbl { font: 700 11px var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--text-2); }
 .field-hint { font-size: 12px; color: var(--text-3); }
-.input, .textarea {
+.input, .textarea, .select {
   width: 100%; padding: 10px var(--s3);
   background: var(--well); color: var(--text);
   border: 2px solid var(--border);
   font: 13px/1.5 var(--font-mono);
 }
 .textarea { min-height: 96px; resize: vertical; }
-.input:hover, .textarea:hover { border-color: color-mix(in srgb, var(--purple) 55%, var(--border)); }
-.input:focus-visible, .textarea:focus-visible { border-color: var(--cyan); }
+.input:hover, .textarea:hover, .select:hover { border-color: color-mix(in srgb, var(--purple) 55%, var(--border)); }
+.input:focus-visible, .textarea:focus-visible, .select:focus-visible { border-color: var(--cyan); }
 .limits { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s4); }
 
 .drop {
   position: relative;
   display: grid; justify-items: center; gap: var(--s2);
   padding: var(--s6) var(--s4);
-  border: 2px dashed color-mix(in srgb, var(--magenta) 50%, var(--border));
-  background:
-    repeating-conic-gradient(rgba(255, 79, 216, .05) 0 25%, transparent 0 50%) 0 0 / 6px 6px,
-    var(--well);
+  border: 2px dashed var(--border);
+  background: var(--well);
   cursor: pointer; text-align: center;
 }
-.drop:hover, .drop.dragging { border-style: solid; border-color: var(--magenta); box-shadow: 0 0 22px -12px var(--magenta); }
+.drop:hover, .drop.dragging { border-style: solid; border-color: var(--cyan); }
 .drop:focus-within { outline: 2px solid var(--magenta); outline-offset: 2px; }
 .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .drop-title { font: 700 13px var(--font-mono); letter-spacing: .08em; color: var(--text); }
@@ -700,6 +716,12 @@ table.runs tbody tr[aria-selected="true"] td:first-child { box-shadow: inset 3px
           </article>
         </div>
 
+        <article class="panel" style="--edge: var(--purple)">
+          <header class="panel-hd"><h2 data-px="REASONING">Reasoning</h2></header>
+          <div class="rs" id="reasoning" role="log" aria-label="Reasoning steps" tabindex="0"></div>
+          <p class="panel-note">Each turn shows the capabilities the model chose, what it re-read, and the notes it wrote: its understanding, hypotheses with confidence, open questions and next candidates. Notes and reports are model-generated; tool results are observed and shown as the digest the model saw, with full outputs in the Trace inspector.</p>
+        </article>
+
         <div class="grid-2">
           <article class="panel" style="--edge: var(--magenta)">
             <header class="panel-hd">
@@ -779,8 +801,14 @@ table.runs tbody tr[aria-selected="true"] td:first-child { box-shadow: inset 3px
 
           <div class="field">
             <label class="field-lbl" for="f-objective">Objective</label>
-            <textarea class="textarea" id="f-objective" name="objective" required>Identify suspicious behavior</textarea>
+            <textarea class="textarea" id="f-objective" name="objective" required>Determine whether this file is malicious, benign, or undetermined from static evidence.</textarea>
             <span class="field-hint">What the investigator should establish about the sample.</span>
+          </div>
+
+          <div class="field">
+            <label class="field-lbl" for="f-model">Model</label>
+            <select class="select" id="f-model" name="model"><option value="">Loading models&#8230;</option></select>
+            <span class="field-hint" id="f-model-hint">The LLM that runs the investigation. Open-source models publish their weights and can be self-hosted. Models without an API key are disabled.</span>
           </div>
 
           <div class="limits">
@@ -871,6 +899,10 @@ const fmtTime = (d) => { d = new Date(d); return `${pad(d.getHours())}:${pad(d.g
 const fmtDate = (d) => { d = new Date(d); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${fmtTime(d)}`; };
 const fmtBytes = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(2)} MB`;
 const shortId = (id) => (id && id.length > 12 ? id.slice(0, 12) : id || '');
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const has = (a) => Array.isArray(a) && a.length > 0;
+// Evidence handles are "<run_id>#<capability>#<n>"; the run is implied by the view.
+const handleName = (handle) => { const p = String(handle).split('#'); return p.length >= 3 ? p.slice(-2).join('#') : String(handle); };
 
 function announce(msg) { const a = $('#announce'); a.textContent = ''; setTimeout(() => { a.textContent = msg; }, 30); }
 
@@ -1191,9 +1223,9 @@ function toneOf(ev) {
   if (k === 'completed') return 'ok';
   if (k === 'failed') return 'err';
   if (/error|exception|fail/.test(k)) return 'err';
-  if (/warn|limit|budget|exhaust|timeout|retry/.test(k)) return 'warn';
+  if (/warn|limit|budget|exhaust|timeout|retry|reject|empty/.test(k)) return 'warn';
   if (/tool/.test(k)) return 'agent';
-  if (/turn|model|assistant|plan|reason|message|step|llm|thought|decision/.test(k)) return 'orch';
+  if (/turn|model|assistant|plan|reason|message|step|llm|thought|decision|notes|recall|report/.test(k)) return 'orch';
   if (/start|connect|system|init|queue|status|config/.test(k)) return 'sys';
   if (k === 'event') {
     if ('tool' in ev || 'tool_calls' in ev || 'tool_name' in ev) return 'agent';
@@ -1220,6 +1252,23 @@ function summarize(ev) {
     return id ? `Investigation completed \u00b7 run ${id}` : 'Investigation completed';
   }
   if (ev.kind === 'failed') return `Investigation failed${ev.error ? `: ${ev.error}` : ''}`;
+  const t = ev.turn != null ? `T${ev.turn} · ` : '';
+  switch (ev.kind) {
+    case 'tool_calls': {
+      const calls = ev.calls || [];
+      const failed = (ev.results || []).filter((r) => r && !r.success).length;
+      return `${t}${plural(calls.length, 'call')}: ${calls.map((c) => c.name).join(', ')}${failed ? ` · ${failed} failed` : ''}`;
+    }
+    case 'notes': {
+      const m = ev.memory || {};
+      return `${t}notes · ${plural((m.hypotheses || []).length, 'hypothesis', 'hypotheses')} · ${plural((m.open_questions || []).length, 'open question')}`;
+    }
+    case 'recall': return `${t}re-read ${(ev.handles || []).map(handleName).join(', ')}`;
+    case 'memory_rejected':
+    case 'report_rejected': return `${t}${trunc(String(ev.failure || 'rejected'), 220)}`;
+    case 'report': { const r = ev.report || {}; return `${t}report · verdict ${r.verdict} · ${plural((r.findings || []).length, 'finding')}`; }
+    case 'empty': return `${t}the model returned nothing this turn`;
+  }
   for (const k of ['message', 'summary', 'text', 'content', 'thought', 'action', 'tool', 'tool_name', 'name', 'status']) {
     const v = ev[k];
     if (typeof v === 'string' && v.trim()) return trunc(v.replace(/\s+/g, ' ').trim(), 220);
@@ -1382,6 +1431,7 @@ function renderAll() {
   renderLifecycle();
   renderAgents();
   renderTerminal();
+  renderReasoning();
   renderRecent();
   renderTable();
   renderEvidence();
@@ -1425,14 +1475,15 @@ function renderMetrics() {
   const active = live.filter((r) => r.status === 'queued' || r.status === 'running').length;
   const completed = live.filter((r) => r.status === 'completed').length;
   const failed = live.filter((r) => r.status === 'failed').length;
+  const threats = live.filter((r) => r.result && /malicious|suspicious/i.test(String(r.result.verdict))).length;
   const box = $('#metrics');
-  const sig = [active, runs.length, completed, failed].join('|');
+  const sig = [active, runs.length, completed, failed, threats].join('|');
   if (box.dataset.sig === sig) return;
   box.dataset.sig = sig;
   box.replaceChildren(
     metric({ label: 'Active investigations', value: active, color: 'var(--cyan)', iconName: 'active', live: active > 0, note: active ? 'queued or running now' : 'nothing running' }),
     metric({ label: 'Artifacts submitted', value: runs.length, color: 'var(--purple)', iconName: 'artifact', note: 'samples uploaded this session' }),
-    metric({ label: 'Threats detected', value: '\u2014', color: 'var(--coral)', iconName: 'threat', dim: true, note: 'Not reported: the result schema has no verdict field' }),
+    metric({ label: 'Threats detected', value: threats, color: 'var(--coral)', iconName: 'threat', dim: !threats, note: 'malicious or suspicious verdicts' }),
     metric({ label: 'Completed', value: completed, color: 'var(--lime)', iconName: 'done', note: failed ? `${failed} failed` : 'finished without error' }),
   );
 }
@@ -1566,6 +1617,149 @@ function renderTerminal() {
   if (state.autoscroll && (nearBottom || first)) box.scrollTop = box.scrollHeight;
 }
 
+/* Reasoning: append-only like the terminal, one card per turn. Events of a
+   turn arrive together (calls, recall, notes, report), so a change in the
+   turn number starts the next card. */
+const rs = { key: null, count: 0, turn: undefined, card: null, head: null, body: null, memory: null };
+const VERDICT_COLOR = { malicious: 'var(--coral)', suspicious: 'var(--amber)', benign: 'var(--lime)' };
+const HYP_COLOR = { open: 'var(--cyan)', supported: 'var(--lime)', weakened: 'var(--amber)' };
+const pct = (x) => Math.round(Math.max(0, Math.min(1, Number(x) || 0)) * 100);
+const sub = (text) => h('div', { class: 'rs-sub' }, text);
+const ids = (label, list) => has(list) && h('span', null, `${label} `, list.join(', '));
+
+function rsStep(label, color, ...body) {
+  return h('div', { class: 'rs-step', vars: { '--c': color } }, h('div', { class: 'rs-lbl' }, label), ...body);
+}
+function toolCallRow(call, result) {
+  const ok = !!(result && result.success);
+  const args = Object.entries(call.arguments || {}).map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`).join(' ');
+  const det = h('details', { class: 'tn' }, h('summary', null,
+    h('span', { class: 'sq', vars: { '--c': ok ? 'var(--lime)' : 'var(--coral)' }, title: ok ? 'succeeded' : 'failed' }),
+    h('span', { class: 'mono' }, call.name),
+    args && h('span', { class: 'rs-args mono' }, args),
+    !ok && h('span', { class: 'rs-err mono' }, trunc(String((result && result.error) || 'no result'), 160))));
+  // The server streams the bounded digest the model was shown; the full output is in the trace.
+  det.addEventListener('toggle', () => {
+    if (!det.open || det.childNodes.length > 1) return;
+    const text = ok ? result.output : (result && result.error) || 'No result returned.';
+    det.append(h('div', { class: 'tn-kids' }, typeof text === 'string'
+      ? h('pre', { class: ok ? 'mono' : 'rs-err', style: 'white-space:pre-wrap;overflow-wrap:anywhere;margin:0;font-size:11.5px' }, text)
+      : treeView(text, 1)));
+  });
+  return det;
+}
+function hypothesisRow(x, old, isNew) {
+  const p = pct(x.confidence);
+  const delta = old ? p - pct(old.confidence) : 0;
+  const color = HYP_COLOR[x.status] || 'var(--purple)';
+  return h('div', { class: 'hyp', vars: { '--c': color } },
+    h('div', { class: 'hyp-hd' },
+      h('span', { class: 'rs-id' }, x.id),
+      chip(String(x.status || 'open'), color),
+      h('span', { class: 'meter', role: 'img', 'aria-label': `confidence ${p}%` }, h('i', { style: `width:${p}%` })),
+      h('span', null, `${p}%`),
+      delta !== 0 && h('span', { style: `color:${delta > 0 ? 'var(--lime)' : 'var(--coral)'}` }, `${delta > 0 ? '+' : ''}${delta}`),
+      isNew && chip('new', 'var(--cyan)')),
+    h('div', null, x.statement),
+    (has(x.supporting_evidence) || has(x.contradicting_evidence)) &&
+      h('div', { class: 'hyp-ev' }, ids('for', x.supporting_evidence), has(x.supporting_evidence) && has(x.contradicting_evidence) && ' · ', ids('against', x.contradicting_evidence)),
+    x.unknowns && h('div', { class: 'faint', style: 'font-size:12px' }, `Unknowns: ${x.unknowns}`));
+}
+function notesView(m, prev) {
+  const before = new Map(((prev && prev.hypotheses) || []).map((x) => [x.id, x]));
+  const same = prev && prev.understanding === m.understanding;
+  return [
+    m.understanding && (same ? h('div', { class: 'faint', style: 'font-size:12px' }, 'Understanding unchanged') : h('p', { class: 'ev-text' }, m.understanding)),
+    has(m.hypotheses) && [sub('Hypotheses'), ...m.hypotheses.map((x) => hypothesisRow(x, before.get(x.id), !!prev && !before.has(x.id)))],
+    has(m.open_questions) && [sub('Open questions'), h('ul', { class: 'rs-list' }, m.open_questions.map((q) => h('li', null, h('span', { class: 'rs-id' }, q.id), ' ', q.question)))],
+    has(m.candidates) && [sub('Next candidates'), h('ul', { class: 'rs-list' }, m.candidates.map((c) => h('li', null, h('span', { class: 'rs-id' }, c.id), ' ', c.investigation, c.reason && h('span', { class: 'muted' }, ` — ${c.reason}`))))],
+  ];
+}
+function findingRow(f) {
+  const sev = severityOf(f);
+  const refs = (f.evidence_refs || []).map((r) => (r && r.evidence_id) || r);
+  return h('div', { class: 'hyp', vars: { '--c': sev ? SEV_COLOR[sev.tone] : 'var(--border)' } },
+    h('div', { class: 'hyp-hd' }, h('strong', { style: 'font-family:var(--font-ui);font-size:13px' }, f.title), sev && sevChip(sev), f.confidence && chip(`confidence: ${f.confidence}`, 'var(--text-2)')),
+    f.description && h('div', null, f.description),
+    (has(refs) || f.source_location) && h('div', { class: 'hyp-ev' }, ids('evidence', refs), has(refs) && f.source_location && ' · ', f.source_location));
+}
+function reportView(r) {
+  const md = r.metadata || {};
+  return [
+    h('div', { class: 'ev-status', style: 'margin:0' },
+      chip(`verdict: ${r.verdict}`, VERDICT_COLOR[String(r.verdict).toLowerCase()] || 'var(--text-2)', { solid: true }),
+      r.completion_reason && chip(r.completion_reason, 'var(--text-2)', { title: 'Why the run ended' }),
+      provModel(),
+      md.turns != null && h('span', { class: 'faint mono', style: 'font-size:12px' }, `${plural(md.turns, 'turn')} · ${plural(md.tool_calls, 'tool call')} · ${md.total_tokens ?? '?'} tokens`)),
+    r.summary && h('p', { class: 'ev-text' }, r.summary),
+    has(r.findings) && [sub(`Findings · ${r.findings.length}`), ...r.findings.map(findingRow)],
+    has(r.recommended_actions) && [sub('Recommended actions'), h('ul', { class: 'rs-list' }, r.recommended_actions.map((a) => h('li', null, a)))],
+  ];
+}
+function reasoningStep(ev) {
+  switch (ev.kind) {
+    case 'tool_calls': {
+      const byId = new Map((ev.results || []).map((r) => [r.tool_call_id, r]));
+      const calls = ev.calls || [];
+      const tokens = ev.usage && ev.usage.total_tokens;
+      return [rsStep(`Capabilities · ${plural(calls.length, 'call')}${tokens ? ` · ${tokens} tokens` : ''}`, 'var(--tm-agent)',
+        h('div', { class: 'tree' }, calls.map((c) => toolCallRow(c, byId.get(c.tool_call_id))))), `${calls.length} calls`, 'var(--tm-agent)'];
+    }
+    case 'recall':
+      return [rsStep('Re-read earlier results', 'var(--blue)', h('div', { class: 'ev-status', style: 'margin:0' }, (ev.handles || []).map((x) => chip(handleName(x), 'var(--blue)', { title: String(x) })))), 'recall', 'var(--blue)'];
+    case 'notes': {
+      const step = rsStep('Notes', 'var(--purple)', notesView(ev.memory || {}, rs.memory));
+      rs.memory = ev.memory || null;
+      return [step, 'notes', 'var(--purple)'];
+    }
+    case 'memory_rejected':
+    case 'report_rejected': {
+      const what = ev.kind === 'report_rejected' ? 'Report' : 'Notes';
+      return [rsStep(`${what} rejected by the harness`, 'var(--amber)', h('p', { class: 'ev-text' }, String(ev.failure || ''))), `${what} rejected`, 'var(--amber)'];
+    }
+    case 'report':
+      return [rsStep('Final report', 'var(--lime)', reportView(ev.report || {})), 'report', 'var(--lime)'];
+    case 'empty':
+      return [rsStep('Empty turn', 'var(--text-3)', h('p', { class: 'ev-text muted' }, 'The model returned no call, notes or report.')), 'empty', 'var(--text-3)'];
+  }
+  return ev.turn != null ? [rsStep(kindOf(ev), 'var(--text-2)', treeView(ev, 0)), kindOf(ev), 'var(--text-2)'] : null;
+}
+function renderReasoning() {
+  const box = $('#reasoning');
+  const run = selRun();
+  const key = run ? `${run.id}#${run.epoch}` : 'none';
+  if (rs.key !== key) { box.replaceChildren(); Object.assign(rs, { key, count: 0, turn: undefined, card: null, head: null, body: null, memory: null }); }
+  if (!run) {
+    if (!box.firstChild) box.append(emptyState('NO RUN SELECTED', 'Select or start an investigation to follow the model’s reasoning turn by turn.'));
+    return;
+  }
+  const list = run.events;
+  if (rs.count === list.length && box.firstChild) return;
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+  for (let i = rs.count; i < list.length; i++) {
+    const ev = list[i].ev;
+    const step = ev && typeof ev === 'object' && reasoningStep(ev);
+    if (!step) continue;
+    if (!rs.card || ev.turn !== rs.turn) {
+      if (!rs.card) box.replaceChildren();
+      rs.turn = ev.turn;
+      rs.head = h('summary', null, h('span', { class: 'ev-key' }, ev.turn != null ? `Turn ${ev.turn}` : 'Step'));
+      rs.body = h('div', { class: 'ev-body' });
+      rs.card = h('details', { class: 'ev-card', vars: { '--c': 'var(--purple)' }, open: true }, rs.head, rs.body);
+      box.append(rs.card);
+    }
+    const [el, tag, color] = step;
+    rs.body.append(el);
+    rs.head.append(chip(tag, color));
+    if (ev.kind === 'report') rs.card.style.setProperty('--c', 'var(--lime)');
+  }
+  rs.count = list.length;
+  if (!rs.card) {
+    const done = TERMINAL.has(run.status);
+    box.replaceChildren(emptyState(done ? 'NO STEPS' : 'WAITING', done ? 'This run recorded no reasoning steps.' : 'Each turn appears here as soon as the model finishes it.'));
+  } else if (state.autoscroll && nearBottom) box.scrollTop = box.scrollHeight;
+}
+
 function renderRecent() {
   const box = $('#recent');
   const sig = state.order.slice(0, 6).map((id) => { const r = state.runs.get(id); return `${id}:${r.status}:${r.lost}`; }).join(',') + `|${state.selected}`;
@@ -1666,6 +1860,11 @@ function renderEvidence() {
     if (!TERMINAL.has(run.status)) out.push(emptyState('AWAITING RESULT', 'The investigator\u2019s result appears here when the run completes. Live activity streams to the Overview terminal.'));
     else if (run.status === 'completed') out.push(emptyState('NO RESULT', 'The run completed without returning a result body.'));
     box.replaceChildren(...out); return;
+  }
+  if (res && typeof res === 'object' && 'verdict' in res) {
+    out.push(h('div', { class: 'ev-card', vars: { '--c': VERDICT_COLOR[String(res.verdict).toLowerCase()] || 'var(--border)' } },
+      h('div', { class: 'ev-body', style: 'display:grid;gap:8px' }, reportView(res))));
+    out.push(h('div', { class: 'section-lbl' }, 'Raw result'));
   }
   out.push(h('div', { class: 'legend', 'aria-label': 'Evidence colour key' },
     chip('PE STRUCTURE', 'var(--ev-pe)'), chip('METADATA', 'var(--ev-meta)'), chip('STRINGS', 'var(--ev-strings)'),
@@ -1892,6 +2091,8 @@ function bindForm() {
     fd.append('objective', objective);
     fd.append('max_turns', String(turns));
     fd.append('max_tool_calls', String(tools));
+    const model = $('#f-model').value;
+    if (model) fd.append('model', model);
 
     submit.disabled = true;
     const label = submit.lastChild.textContent;
@@ -1957,8 +2158,25 @@ function bindChrome() {
   window.addEventListener('hashchange', route);
   window.addEventListener('pagehide', closeStream);
 }
+// The model picker, from the server's profiles: a model whose key is not set
+// is listed but disabled, so the choice explains itself.
+async function loadModels() {
+  const select = $('#f-model');
+  try {
+    const res = await fetch('/api/models');
+    if (!res.ok) throw new Error(String(res.status));
+    const models = await res.json();
+    select.replaceChildren(...models.map((m) => h('option', {
+      value: m.id, disabled: !m.ready, selected: m.default,
+    }, `${m.label}${m.open_source ? ' · open source' : ''}${m.default ? ' (default)' : ''}${m.ready ? '' : ' — no API key'}`)));
+  } catch (e) {
+    select.replaceChildren(h('option', { value: '' }, 'Server default'));
+  }
+}
+
 function init() {
   decorate();
+  loadModels();
   bindChrome();
   bindForm();
   restore();

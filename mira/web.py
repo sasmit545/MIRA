@@ -17,7 +17,9 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from mira.reasoning.composition import load_env
-from mira.reasoning.main import investigate
+from mira.reasoning.main import DEFAULT_OBJECTIVE, investigate
+from mira.reasoning.model.adapter import DEFAULT_MODEL, MODELS, available_models
+from mira.reasoning.runtime.payload import digest
 from mira.reasoning.runtime.trace import trace_path
 
 TERMINAL = {"completed", "failed"}
@@ -40,6 +42,23 @@ def _json_value(value: Any) -> Any:
     return value
 
 
+def _slim(event: dict[str, Any]) -> dict[str, Any]:
+    """Bound what the stream and events.jsonl carry.
+
+    The trace keeps every full payload, so a tool output travels as the digest
+    the model was shown, and the raw `observations` a result repeats are dropped.
+    """
+    if event.get("kind") == "tool_calls":
+        event["results"] = [
+            {**result, "output": digest(result["output"])} if result.get("success") else result
+            for result in event.get("results") or []
+        ]
+    for key in ("report", "result"):
+        if isinstance(event.get(key), dict):
+            event[key] = {k: v for k, v in event[key].items() if k != "observations"}
+    return event
+
+
 def create_app(data_dir: Path = Path("runs/ui")) -> FastAPI:
     """Create a local-only UI service backed by the existing investigator."""
     app = FastAPI(title="MIRA Investigation Console")
@@ -53,9 +72,10 @@ def create_app(data_dir: Path = Path("runs/ui")) -> FastAPI:
     @app.post("/api/investigations", status_code=202)
     async def start_investigation(
         sample: UploadFile = File(...),
-        objective: str = Form("Identify suspicious behavior"),
+        objective: str = Form(DEFAULT_OBJECTIVE),
         max_turns: int = Form(10),
         max_tool_calls: int = Form(20),
+        model: str = Form(DEFAULT_MODEL),
     ) -> dict[str, Any]:
         if not sample.filename:
             raise HTTPException(400, "A sample file is required")
@@ -63,6 +83,8 @@ def create_app(data_dir: Path = Path("runs/ui")) -> FastAPI:
             raise HTTPException(400, "An investigation objective is required")
         if max_turns < 1 or max_tool_calls < 1:
             raise HTTPException(400, "Turn and tool-call limits must be positive")
+        if model not in MODELS:
+            raise HTTPException(400, f"Unknown model {model!r}; choose one of: {', '.join(MODELS)}")
 
         investigation_id = uuid4().hex
         run_dir = app.state.data_dir / investigation_id
@@ -81,10 +103,16 @@ def create_app(data_dir: Path = Path("runs/ui")) -> FastAPI:
             "changed": asyncio.Event(),
             "result": None,
             "error": None,
+            "model": model,
         }
         app.state.runs[investigation_id] = record
         asyncio.create_task(_run(record, sample_path, max_turns, max_tool_calls))
         return _public_record(record)
+
+    @app.get("/api/models")
+    async def list_models() -> list[dict[str, Any]]:
+        load_env()
+        return available_models()
 
     @app.get("/api/investigations/{investigation_id}")
     async def get_investigation(investigation_id: str) -> dict[str, Any]:
@@ -132,7 +160,7 @@ async def _run(record: dict[str, Any], sample_path: Path, max_turns: int, max_to
     def publish(event: dict) -> None:
         # Called on the event loop thread, so swapping the Event is race-free:
         # a subscriber captures it before reading and waits on that one.
-        event = _json_value(event)
+        event = _slim(_json_value(event))
         record["events"].append(event)
         # On disk as it happens: the trace is written only when the run ends,
         # so this is what survives a hung run or a killed server.
@@ -149,9 +177,10 @@ async def _run(record: dict[str, Any], sample_path: Path, max_turns: int, max_to
             trace_dir=record["run_dir"],
             max_turns=max_turns,
             max_tool_calls=max_tool_calls,
+            model=record["model"],
             on_turn=publish,
         )
-        record["result"] = _json_value(output)
+        record["result"] = _slim({"result": _json_value(output)})["result"]
         record["status"] = "completed"
     except Exception as error:  # The UI reports the failed run; the trace remains inspectable.
         logger.exception("investigation %s failed", record["id"])
@@ -180,6 +209,7 @@ def _public_record(record: dict[str, Any]) -> dict[str, Any]:
         "status": record["status"],
         "objective": record["objective"],
         "sample_name": record["sample_name"],
+        "model": record.get("model", DEFAULT_MODEL),
         "result": record["result"],
         "error": record["error"],
     }
