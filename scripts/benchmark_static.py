@@ -29,7 +29,7 @@ from pathlib import Path
 
 from mira.reasoning.composition import load_env
 from mira.reasoning.main import DEFAULT_OBJECTIVE, investigate
-from mira.reasoning.model.adapter import ModelAdapter
+from mira.reasoning.model.adapter import DEFAULT_MODEL, MODELS, ModelAdapter
 from mira.reasoning.runtime.trace import trace_path
 
 MANIFEST_COLUMNS = ("path", "label", "sha256", "label_source", "labeled_on", "split", "source", "family", "packed")
@@ -388,6 +388,7 @@ def main() -> None:
     run.add_argument("--objective", default=DEFAULT_OBJECTIVE)
     run.add_argument("--out", type=Path, default=Path("runs/benchmarks/benchmark.jsonl"))
     run.add_argument("--trace-dir", type=Path, default=Path("runs/benchmarks/traces"))
+    run.add_argument("--model", choices=list(MODELS), default=DEFAULT_MODEL, help="which model investigates")
     versus = commands.add_parser("compare", help="compare a baseline row set with a pipeline row set")
     versus.add_argument("baseline", type=Path)
     versus.add_argument("pipeline", type=Path)
@@ -397,7 +398,8 @@ def main() -> None:
 
     if arguments.command == "run":
         asyncio.run(run_manifest(
-            arguments.manifest, arguments.runs, arguments.objective, arguments.trace_dir, arguments.out, split=arguments.split
+            arguments.manifest, arguments.runs, arguments.objective, arguments.trace_dir, arguments.out, split=arguments.split,
+            model_factory=lambda: ModelAdapter(model=arguments.model),
         ))
     elif arguments.command == "score":
         print(score(load_rows(arguments.rows)))

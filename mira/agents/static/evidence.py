@@ -37,6 +37,8 @@ CONFIDENCE_RULE_MATCH = 0.9  # a curated rule fired on this sample
 # the like) is what any program does, so it stays evidence but weak.
 CAPA_INTENT_NAMESPACES = frozenset({"anti-analysis", "persistence", "impact", "malware-family"})
 CAPA_SENSITIVE_NAMESPACES = frozenset({"communication", "collection", "targeting"})
+# capa's packer rules say how the file is packed, not what it does.
+CAPA_PACKER_NAMESPACE = "anti-analysis/packer"
 
 ENTRY_POINT_DISCOVERY = "pe_entry_point"  # list_functions' discovery_source for the entry point
 CONFIDENCE_STRONG = 0.8
@@ -139,11 +141,15 @@ class Signal(NamedTuple):
     which is the one place that sees every result in order (KTD1). `rule` is a
     stable key per evidence rule, such as `strings:URL`, so the signal survey
     can count firing rates; it never reaches Evidence or the prompt.
+    `supporting` marks entropy and packing signals: benign installers and
+    compressed resources show them too, so they may back a finding but never
+    count toward the corroboration a malicious verdict needs.
     """
 
     observation: str
     confidence: float
     rule: str
+    supporting: bool = False
 
 
 def normalize(capability: str, result: dict, prior: dict[str, dict]) -> list[Signal]:
@@ -193,6 +199,7 @@ def _analyze_pe(data: dict, prior: dict[str, dict], coverage: str) -> list[Signa
                 f"{PACKED_SECTION_ENTROPY} threshold that suggests packed or encrypted content.",
                 _entropy_confidence(entropy, PACKED_SECTION_ENTROPY),
                 "section:high-entropy",
+                supporting=True,
             ))
         if name.lower() not in STANDARD_SECTION_NAMES:
             signals.append(Signal(
@@ -216,6 +223,7 @@ def _detect_packer(data: dict, prior: dict[str, dict], coverage: str) -> list[Si
         # signal, not a model's self-report, so it is usable as-is.
         float(data.get("confidence") or CONFIDENCE_MODERATE),
         "packer:detected",
+        supporting=True,
     )]
 
 
@@ -290,6 +298,7 @@ def _calculate_entropy(data: dict, prior: dict[str, dict], coverage: str) -> lis
             f"at or above the {HIGH_REGION_ENTROPY} threshold that suggests compressed or encrypted content.",
             _entropy_confidence(entropy, HIGH_REGION_ENTROPY),
             "entropy:high-region",
+            supporting=True,
         ))
     # A packed stub can hide inside a region whose average looks ordinary.
     chunks = data.get("chunks") or []
@@ -300,6 +309,7 @@ def _calculate_entropy(data: dict, prior: dict[str, dict], coverage: str) -> lis
             f"threshold, at offsets {_examples([chunk.get('offset') for chunk in high])}.",
             _entropy_confidence(max(chunk["entropy"] for chunk in high), HIGH_REGION_ENTROPY),
             "entropy:high-window",
+            supporting=True,
         ))
     return signals
 
@@ -336,6 +346,7 @@ def _run_capa(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal]
             f"({namespace}) in this artifact ({coverage}){ordinary}.",
             confidence,
             f"capa:{finding.get('rule_id')}",
+            supporting=namespace.startswith(CAPA_PACKER_NAMESPACE),
         ))
     rest = graded[MAX_RULE_SIGNALS:]
     return signals + _remainder(
@@ -400,6 +411,7 @@ def _file_info(data: dict, prior: dict[str, dict], coverage: str) -> list[Signal
             f"threshold that suggests the bulk of the file is compressed or encrypted.",
             _entropy_confidence(entropy, HIGH_REGION_ENTROPY),
             "file:high-entropy",
+            supporting=True,
         ))
     if data.get("file_type") == "unknown":
         # ponytail: the plan's intended signal here is a declared type that

@@ -504,3 +504,20 @@ def test_static_confidence_constants_fall_in_the_band_their_names_imply():
     assert grade(CONFIDENCE_STRONG) == grade(CONFIDENCE_RULE_MATCH) == "strong"
     assert grade(CONFIDENCE_MODERATE) == "moderate"
     assert grade(CONFIDENCE_WEAK) == grade(BASE_CONFIDENCE) == "weak"
+
+
+# --- Entropy and packing support a finding but never corroborate one --------
+
+
+def test_entropy_and_packing_signals_are_supporting_and_strong_rules_are_not():
+    supporting = [
+        *normalize("calculate_entropy", windows(high_at=(3,)), {}),
+        *normalize("file_info", ok({"entropy": 7.9, "file_type": "pe"}), {}),
+        *normalize("analyze_pe", ok({"sections": [{"name": ".text", "entropy": 7.9}]}), {}),
+        *normalize("detect_packer", ok({"packed": True, "packer": "UPX", "confidence": 0.9}), {}),
+        *normalize("run_capa", capa("anti-analysis/packer/upx"), {}),
+    ]
+    corroborating = normalize("run_capa", capa("anti-analysis/anti-debugging/debugger-detection"), {})
+
+    assert len(supporting) == 5 and all(signal.supporting for signal in supporting)
+    assert corroborating and not any(signal.supporting for signal in corroborating)

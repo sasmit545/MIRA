@@ -317,6 +317,22 @@ async def test_capa_with_a_few_findings_is_one_worker_call():
     assert len(client.calls) == 1
 
 
+async def test_capa_details_stay_aligned_with_findings_across_pages():
+    class CapaPages:
+        async def invoke(self, capability, artifact_id, offset=0, limit=1000, **parameters):
+            names = [f"rule {index:04d}" for index in range(offset, min(offset + limit, 1500))]
+            return {
+                "status": "ok",
+                "data": {"findings": [{"rule_id": name} for name in names], "details": [{"rule_id": name} for name in names]},
+                "metadata": {"offset": offset, "limit": limit, "total": 1500, "has_more": offset + len(names) < 1500},
+            }
+
+    result = await build_executor(CapaPages(), "sample")("run_capa", {})
+
+    findings, details = result["data"]["findings"], result["data"]["details"]
+    assert len(findings) == 1500 and [item["rule_id"] for item in details] == [item["rule_id"] for item in findings]
+
+
 async def test_strings_past_the_cap_say_how_many_were_not_fetched():
     from mira.reasoning.runtime.payload import digest
 

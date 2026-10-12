@@ -15,7 +15,11 @@ class YaraMatch(Contract):
 
 class ScanYaraInput(Contract):
     artifact_id: str = Field(..., description="Identifier of the artifact")
-    ruleset: str = Field(..., description="Name of a configured rule set to scan with")
+    ruleset: str = Field(
+        "all",
+        description="Name of a configured rule set to scan with, or 'all' (the default) to scan every "
+        "configured rule set in one call; each match's namespace names the rule set it came from",
+    )
     limit: int = Field(100, ge=1, le=1000, description="Maximum number of items to return")
     offset: int = Field(0, ge=0, description="Offset for pagination")
 

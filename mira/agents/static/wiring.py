@@ -30,7 +30,15 @@ SOURCE_AGENT = "static"
 STATIC_ROLE = "You are a static malware investigator."
 STATIC_SCOPE = (
     "Static analysis only. The artifact under investigation is bound by the runtime, "
-    "so tool arguments never need to name it."
+    "so tool arguments never need to name it.\n"
+    "Weigh evidence in this order. First, specific YARA rule matches and capa findings that name "
+    "intent (anti-analysis, persistence, impact, a malware family). Next, imports and strings that "
+    "fit a hypothesis: injection or anti-debugging APIs, URLs, registry paths. Last, generic "
+    "anomalies such as unusual section names or ordinal-only imports, and any finding that only "
+    "restates one already counted.\n"
+    "High entropy and packing are supporting evidence, not proof: installers, compressed resources "
+    "and protected commercial software show them too. A packed file is a reason to look for what "
+    "the packing hides, not a verdict."
 )
 
 # Capabilities one call collects whole (KTD1), with the item cap that bounds
@@ -203,7 +211,10 @@ async def _collect(client: StaticMCPClient, capability: str, artifact_id: str, p
         return first
     # Walk on from the offset the server validated: the model may send "500".
     start = first["metadata"].get("offset", start)
-    items = list(first["data"][key])
+    # A page's lists are parallel slices (run_capa's findings and details), so
+    # every one grows together; `key` is the list that counts.
+    lists = {name: list(value) for name, value in first["data"].items() if isinstance(value, list)}
+    items = lists[key]
     has_more = first["metadata"]["has_more"]
     pages, fetch_error = 1, None
     while has_more and len(items) < cap:
@@ -222,7 +233,8 @@ async def _collect(client: StaticMCPClient, capability: str, artifact_id: str, p
             break
         if not page["data"][key]:
             break  # a page that adds nothing would walk the same offset forever
-        items.extend(page["data"][key])
+        for name, collected in lists.items():
+            collected.extend(page["data"].get(name) or [])
         has_more = page["metadata"]["has_more"]
 
     total = first["metadata"]["total"]
@@ -233,7 +245,7 @@ async def _collect(client: StaticMCPClient, capability: str, artifact_id: str, p
         metadata["next_offset"] = start + len(items)
     if fetch_error:
         metadata["fetch_error"] = fetch_error
-    return {**first, "data": {**first["data"], key: items}, "metadata": metadata}
+    return {**first, "data": {**first["data"], **lists}, "metadata": metadata}
 
 
 def build_evidence_executor(
@@ -280,6 +292,7 @@ def build_evidence_executor(
                 artifact_id=artifact_id,
                 confidence=signal.confidence,
                 provenance=provenance,
+                corroborates=not signal.supporting,
             )
             evidence.append(item)
             if state is not None:

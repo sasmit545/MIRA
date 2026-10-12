@@ -210,6 +210,7 @@ class CapaAnalyzerTests(unittest.IsolatedAsyncioTestCase):
                 "    authors: [test@example.com]\n"
                 "    scopes: {static: file, dynamic: file}\n"
                 "    examples: ['0000000000000000000000000000000000000000000000000000000000000000:0x0']\n"
+                "    att&ck: ['Defense Evasion::Obfuscated Files or Information [T1027]']\n"
                 "  features:\n"
                 '    - string: "MIRA-TEST-MARKER"\n'
             )
@@ -222,6 +223,13 @@ class CapaAnalyzerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["rule_id"], "contains marker string")
         self.assertEqual(findings[0]["namespace"], "example")
+        # Compact: ids only, and none of the rule's authoring metadata.
+        self.assertEqual(findings[0]["attack"], ["T1027"])
+        self.assertEqual(set(findings[0]), {"rule_id", "namespace", "attack", "mbc", "matches"})
+        detail = result["data"]["details"][0]
+        self.assertEqual(detail["rule_id"], "contains marker string")
+        self.assertEqual(detail["attack"], ["Defense Evasion::Obfuscated Files or Information [T1027]"])
+        self.assertNotIn("authors", detail)
 
 
 class CapaResourceTests(unittest.TestCase):
@@ -395,3 +403,43 @@ def test_an_unknown_yara_ruleset_names_real_ones():
     assert "closest configured: gen_webshells" in near["error"]["message"]
     assert "3 are configured" in far["error"]["message"]
     assert "apt, crime, gen" in far["error"]["message"]
+
+
+def test_the_default_yara_scan_runs_every_ruleset_and_names_each_match_s_ruleset(tmp_path):
+    """A model guessing ruleset names one per turn spent a whole live run on it."""
+    from mira.capabilities.static.yara_scanner import scan_yara
+    from mira.core.artifact import Artifact
+
+    sample = tmp_path / "sample.exe"
+    sample.write_bytes(b"MZ" + b"\0" * 62)
+    rulesets = {}
+    for name in ("apt_one", "crime_two"):
+        rulesets[name] = tmp_path / f"{name}.yar"
+        rulesets[name].write_text(f"rule {name}_hit {{ condition: uint16(0) == 0x5A4D }}")
+    artifact = Artifact(artifact_id="a", path=sample, file_type="pe", size=64, sha256="0" * 64)
+
+    result = scan_yara(artifact, rulesets=rulesets)
+
+    assert result["status"] == "ok", result.get("error")
+    assert {(match["namespace"], match["rule"]) for match in result["data"]["matches"]} == {
+        ("apt_one", "apt_one_hit"), ("crime_two", "crime_two_hit"),
+    }
+
+
+def test_capa_details_name_the_features_that_matched():
+    """Live: a model asked three times which strings an anti-VM rule saw. It
+    matched 'Xen7' from compressed data, and nothing in the result said so."""
+    from types import SimpleNamespace as Node
+
+    from mira.capabilities.static.capa_analyzer import MAX_MATCHED, _matched
+
+    def leaf(text, success=True):
+        return Node(success=success, statement=text, children=[])
+
+    regex = 'regex(string =~ /^Xen/i, matches = "Xen7")'
+    first = Node(success=True, statement="or(...)", children=[leaf(regex), leaf("regex(/HVM domU/)", success=False)])
+    again = Node(success=True, statement="or(...)", children=[leaf(regex)])
+    many = Node(success=True, statement="or(...)", children=[leaf(f"api(F{index})") for index in range(MAX_MATCHED + 5)])
+
+    assert _matched([first, again]) == [regex]
+    assert len(_matched([many])) == MAX_MATCHED
