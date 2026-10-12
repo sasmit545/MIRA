@@ -3,8 +3,10 @@
 The only file that touches the provider SDK.
 """
 
+import dataclasses
 import json
 import os
+import re
 from typing import Any, List, Optional
 from urllib.parse import urlparse
 
@@ -24,18 +26,68 @@ MEMORY_TOOL = "record_memory"
 RECALL_TOOL = "recall_observation"  # rides tool_calls; the loop intercepts it by name
 
 
-class ModelAdapter:
-    """Adapter for the deployment that MODEL_BASE_URL and MODEL_NAME name."""
+@dataclasses.dataclass(frozen=True)
+class ModelProfile:
+    """One selectable model. A profile with no fixed URL or name reads it from
+    the environment, so a missing setting never reaches a stale deployment."""
 
-    def __init__(self, api_key: Optional[str] = None):
+    label: str
+    key_env: str
+    base_url: Optional[str] = None  # None: MODEL_BASE_URL
+    name: Optional[str] = None  # None: MODEL_NAME
+    request: dict = dataclasses.field(default_factory=dict)  # extra create() arguments
+    open_source: bool = False  # weights published, so it can also be self-hosted
+
+
+MODELS = {
+    "nemotron": ModelProfile(
+        label="NVIDIA Nemotron 3 super 120B (a12b)",
+        key_env="NVIDIA_API_KEY",
+        base_url="https://integrate.api.nvidia.com/v1",
+        name="nvidia/nemotron-3-super-120b-a12b",
+        open_source=True,
+        # As NVIDIA's own example calls it.
+        request={
+            "temperature": 1,
+            "top_p": 0.95,
+            "extra_body": {"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 16384},
+        },
+    ),
+    "azure": ModelProfile(label="Azure deployment (MODEL_NAME)", key_env="MODEL_API_KEY"),
+}
+# The cheaper model; the Azure deployment stays one choice away.
+DEFAULT_MODEL = "nemotron"
+
+
+def available_models() -> list[dict]:
+    """Every profile, and whether its key is set, for a model picker."""
+    return [
+        {
+            "id": model_id,
+            "label": profile.label.replace("MODEL_NAME", os.getenv("MODEL_NAME") or "MODEL_NAME"),
+            "ready": bool(os.getenv(profile.key_env)),
+            "open_source": profile.open_source,
+            "default": model_id == DEFAULT_MODEL,
+        }
+        for model_id, profile in MODELS.items()
+    ]
+
+
+class ModelAdapter:
+    """Adapter for one model in MODELS, the default unless named."""
+
+    def __init__(self, api_key: Optional[str] = None, model: str = DEFAULT_MODEL):
+        profile = MODELS.get(model)
+        if profile is None:
+            raise ValueError(f"unknown model {model!r}; choose one of: {', '.join(MODELS)}")
         if api_key is None:
-            api_key = os.getenv("MODEL_API_KEY")
+            api_key = os.getenv(profile.key_env)
         if not api_key:
-            raise ValueError("MODEL_API_KEY environment variable is not set")
-        # No defaults: a missing setting must not silently reach a stale deployment.
-        base_url = _required("MODEL_BASE_URL")
-        self.model_name = _required("MODEL_NAME")
+            raise ValueError(f"{profile.key_env} environment variable is not set")
+        base_url = profile.base_url or _required("MODEL_BASE_URL")
+        self.model_name = profile.name or _required("MODEL_NAME")
         self.endpoint_host = urlparse(base_url).hostname or base_url
+        self.request = profile.request
         self.client = OpenAI(base_url=base_url, api_key=api_key)
 
     def generate(self, context: str, tools: List[Any], force: Optional[str] = None) -> ModelResponse:
@@ -60,6 +112,7 @@ class ModelAdapter:
             messages=[{"role": "user", "content": context}],
             tools=declared,
             max_tokens=MAX_TOKENS,
+            **getattr(self, "request", {}),
             **extra,
         )
 
@@ -69,13 +122,17 @@ class ModelAdapter:
         report: Optional[str] = None
         memory_update: Optional[dict] = None
         for call in message.tool_calls or []:
-            arguments = _arguments(call.function.arguments)
+            arguments, unreadable = _parsed_arguments(call.function.arguments)
             if call.function.name == REPORT_TOOL:
                 # The report rides the existing report path; findings default to
                 # empty so a terse submission still satisfies the output contract.
-                report = json.dumps({"findings": [], **arguments})
+                # Unreadable, it goes on raw: the validator then names the JSON
+                # error to the model, and the trace keeps what was sent, where
+                # an empty {} read as "missing summary, verdict".
+                report = (call.function.arguments or "") if unreadable else json.dumps({"findings": [], **arguments})
             elif call.function.name == MEMORY_TOOL:
-                memory_update = arguments
+                # Unreadable notes are notes not sent, so the loop asks again.
+                memory_update = None if unreadable else arguments
             else:
                 calls.append(
                     ToolCall(
@@ -369,13 +426,35 @@ def _usage(usage: Any) -> Optional[dict]:
     }
 
 
+# A valid JSON escape, or a lone backslash that starts none.
+_ESCAPE = re.compile(r'\\(["\\/bfnrt]|u[0-9a-fA-F]{4})|\\')
+
+
 def _arguments(raw: str | None) -> dict:
     """Tool arguments arrive as a JSON string; a model can still send junk."""
+    parsed, _ = _parsed_arguments(raw)
+    return parsed
+
+
+def _parsed_arguments(raw: str | None) -> tuple[dict, str]:
+    """The arguments, or {} and why they could not be read.
+
+    A model quoting a Windows path writes `Software\\Microsoft` with a single
+    backslash, an invalid JSON escape that failed a live run's whole report.
+    Such a backslash is read as a literal one before giving up.
+    """
+    text = raw or "{}"
     try:
-        parsed = json.loads(raw or "{}")
-    except (json.JSONDecodeError, ValueError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError) as error:
+        repaired = _ESCAPE.sub(lambda match: match.group(0) if match.group(1) else "\\\\", text)
+        try:
+            parsed = json.loads(repaired)
+        except (json.JSONDecodeError, ValueError):
+            return {}, f"its arguments were not valid JSON ({error})"
+    if not isinstance(parsed, dict):
+        return {}, "its arguments were not a JSON object"
+    return parsed, ""
 
 
 def _from_text(text: str) -> ModelResponse:

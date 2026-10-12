@@ -14,7 +14,7 @@ from ..contracts.tool import ToolCall, ToolResult, ToolSpec
 from ..definition.agent import AgentDefinition
 from ..model.adapter import ModelAdapter
 from .completion import MAX_MEMORY_REJECTIONS, MAX_REPORT_REJECTIONS, CompletionChecker
-from .context import ContextBuilder
+from .context import WRAP_UP_TURNS, ContextBuilder
 from .narrative import apply_narrative
 from .payload import recall_fingerprint, select
 from .tool_runtime import ToolRuntime
@@ -93,9 +93,15 @@ class AgentLoop:
             state.recalled = []
             available_tools: List[ToolSpec] = agent_def.allowed_tools
 
+            # The last turns accept only a report. Asked in the prompt alone, a
+            # live model kept recalling to the limit, and its one forced report
+            # then came back without a verdict. A report rejected here is shown
+            # with its reason, so the next turn can fix it.
+            wrapping_up = agent_def.max_turns - state.turn_count <= WRAP_UP_TURNS
             response: ModelResponse = self.model.generate(
                 context=context_str,
                 tools=available_tools,
+                force=REPORT_TOOL_CALL_ID if wrapping_up else None,
             )
             state.record_usage(response.usage)
 
@@ -521,16 +527,10 @@ def _prior_success(state: State, call: ToolCall, spec: Optional[ToolSpec]) -> Op
 
 def _recall(state: State, arguments: dict) -> Tuple[str, bool]:
     """Answer one recall_observation as prompt text, and whether it showed
-    anything new (KTD8). A repeat gets a pointer, not the answer again (R11)."""
+    anything new (KTD8). A repeat is answered again from storage but is never
+    new, so a loop of repeats still trips the stall detector (R11)."""
     asked = ", ".join(f"{name}={value!r}" for name, value in arguments.items())
     fingerprint = recall_fingerprint(arguments)
-    if fingerprint in state.recall_fingerprints:
-        state.repeat_recalls += 1
-        return (
-            f"recall_observation({asked}): already answered on turn {state.recall_fingerprints[fingerprint]}; "
-            "not repeated. What it showed belongs in your notes; ask for something else, "
-            "or submit your report if you have enough."
-        ), False
     handle = arguments.get("handle")
     if not isinstance(handle, str) or not handle:
         return f"recall_observation({asked}) failed: handle is required, copied from the capability history.", False
@@ -546,6 +546,17 @@ def _recall(state: State, arguments: dict) -> Tuple[str, bool]:
     selection = select(result.output, arguments)
     if selection.failure:
         return f"recall_observation({asked}) failed: {selection.failure}", False
+    if fingerprint in state.recall_fingerprints:
+        # Served again rather than refused: a live model whose notes dropped
+        # the answer re-asked three times and got only a pointer to those
+        # notes. Reading stored data costs nothing; the repeat earns no progress.
+        state.repeat_recalls += 1
+        return (
+            f"recall_observation({asked}): a repeat of turn {state.recall_fingerprints[fingerprint]}'s recall, "
+            "served again from storage. It shows nothing new and does not count as progress; "
+            "record what you need from it now, then ask for something else or submit your report.\n"
+            f"{selection.text}"
+        ), False
     # Only an answer is remembered: a failure may stop applying, so its retry runs.
     state.recall_fingerprints[fingerprint] = state.turn_count + 1
     # The ledger (KTD7) records what was shown, apart from evidence: showing

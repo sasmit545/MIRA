@@ -714,7 +714,7 @@ def test_a_fingerprint_ignores_argument_order_and_search_case():
     assert one != recall_fingerprint({"handle": "h", "path": "data.imports", "contains": ["other"]})
 
 
-async def test_a_repeated_recall_gets_a_pointer_and_no_items(tmp_path):
+async def test_a_repeated_recall_is_served_again_from_storage_but_marked_a_repeat(tmp_path):
     seen = []
 
     class Watching(ScriptedModel):
@@ -732,7 +732,7 @@ async def test_a_repeated_recall_gets_a_pointer_and_no_items(tmp_path):
     result = await loop.run(Objective(description="o"), build_definition(tools=[IMPORTS_SPEC]))
 
     assert "[0] " in seen[2]
-    assert "already answered on turn 2" in seen[3] and "[0] " not in seen[3]
+    assert "a repeat of turn 2's recall, served again from storage" in seen[3] and "[0] " in seen[3]
     assert result.metadata["repeat_recalls"] == 1
 
 
@@ -1024,3 +1024,27 @@ async def test_every_submitted_report_reaches_the_trace_with_its_validation(tmp_
     validations = [turn["validation"] for turn in turns if turn.get("validation")]
     assert [record["outcome"] for record in validations] == ["rejected", "rejected", "accepted"]
     assert validations[-1]["uncited_strong"] == ["E2"]
+
+
+async def test_the_last_turns_force_a_report_and_a_malformed_one_can_be_fixed(tmp_path):
+    """Live: a model told to report kept recalling to the limit, then its one
+    forced report came back as {"findings": []} and the run was lost."""
+    forced = []
+
+    class Recording(ScriptedModel):
+        def generate(self, context, tools, force=None):
+            if force != "record_memory":
+                forced.append(force)
+            return super().generate(context, tools, force)
+
+    model = Recording(
+        ModelResponse(tool_calls=[imports_call("1")], memory_update=NOTES),
+        ModelResponse(tool_calls=[recall_imports(limit=5)], memory_update=NOTES),
+        ModelResponse(report='{"findings": []}'),
+        ModelResponse(report=REPORT),
+    )
+    loop = build_loop(model, tmp_path, tools=[IMPORTS_SPEC], executor=lambda name, arguments: collected())
+    result = await loop.run(Objective(description="o"), build_definition(tools=[IMPORTS_SPEC], max_turns=4))
+
+    assert forced == [None, None, "submit_report", "submit_report"]
+    assert result.summary == "test" and result.completion_reason != "limit_turns"

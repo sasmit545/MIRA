@@ -319,3 +319,14 @@ def test_the_prompt_states_the_verdict_rules_code_enforces_and_no_other():
     assert "benign, malicious or inconclusive" in stop
     assert "two different capabilities" in stop
     assert "contradict" not in context.lower()
+
+
+def test_the_prompt_counts_turns_against_the_limit_and_asks_for_a_report_near_it():
+    """Live runs saw only 'Turn: N' and explored until the limit cut them off."""
+    state = build_state()
+    early = ContextBuilder.build(state, build_definition())
+    state.turn_count = 8
+    late = ContextBuilder.build(state, build_definition())
+
+    assert "Turn: 0 of 10" in early and "only submit_report is available" not in early
+    assert "Only 2 turns left, and only submit_report is available" in late

@@ -8,7 +8,7 @@ from unittest import mock
 
 import pytest
 
-from mira.reasoning.model.adapter import ModelAdapter
+from mira.reasoning.model.adapter import MODELS, ModelAdapter
 
 ENDPOINT = {
     "MODEL_API_KEY": "key",
@@ -17,9 +17,9 @@ ENDPOINT = {
 }
 
 
-def test_the_endpoint_and_model_come_from_the_environment():
+def test_the_azure_endpoint_and_model_come_from_the_environment():
     with mock.patch.dict(os.environ, ENDPOINT, clear=True):
-        adapter = ModelAdapter()
+        adapter = ModelAdapter(model="azure")
 
     assert str(adapter.client.base_url).rstrip("/") == ENDPOINT["MODEL_BASE_URL"]
     assert adapter.model_name == "some-model"
@@ -30,7 +30,34 @@ def test_the_endpoint_and_model_come_from_the_environment():
 def test_a_missing_endpoint_setting_fails_by_name(missing):
     settings = {name: value for name, value in ENDPOINT.items() if name != missing}
     with mock.patch.dict(os.environ, settings, clear=True), pytest.raises(ValueError, match=missing):
+        ModelAdapter(model="azure")
+
+
+def test_the_default_model_is_nemotron_on_nvidia_with_its_own_key():
+    with mock.patch.dict(os.environ, {"NVIDIA_API_KEY": "nv"}, clear=True):
+        adapter = ModelAdapter()
+
+    assert adapter.model_name == MODELS["nemotron"].name and adapter.model_name.startswith("nvidia/")
+    assert adapter.endpoint_host == "integrate.api.nvidia.com"
+    assert adapter.request["extra_body"]["chat_template_kwargs"] == {"enable_thinking": True}
+
+
+def test_a_model_without_its_key_or_an_unknown_model_fails_by_name():
+    with mock.patch.dict(os.environ, {}, clear=True), pytest.raises(ValueError, match="NVIDIA_API_KEY"):
         ModelAdapter()
+    with pytest.raises(ValueError, match="unknown model"):
+        ModelAdapter(model="nope")
+
+
+def test_the_picker_lists_every_model_and_which_have_keys():
+    from mira.reasoning.model.adapter import available_models
+
+    with mock.patch.dict(os.environ, {**ENDPOINT}, clear=True):
+        models = {m["id"]: m for m in available_models()}
+
+    assert models["nemotron"]["default"] and not models["nemotron"]["ready"]
+    assert models["nemotron"]["open_source"] and not models["azure"]["open_source"]
+    assert models["azure"]["ready"] and models["azure"]["label"] == "Azure deployment (some-model)"
 
 
 async def test_a_scripted_model_needs_no_endpoint_settings(tmp_path):

@@ -23,18 +23,23 @@ class ContextBuilder:
             objective=state.objective.description,
             scope=agent_definition.scope,
             available_tools=list(agent_definition.allowed_tools),
-            current_state=render_state(state),
+            current_state=render_state(state, agent_definition.max_turns),
         )
 
 
-def render_state(state: State) -> str:
+# From this many turns left, the prompt tells the model to report now: a run
+# that hits the limit gets one report-only turn, after its budget is spent.
+WRAP_UP_TURNS = 2
+
+
+def render_state(state: State, max_turns: int) -> str:
     """Render counters, capability history, and findings for the prompt.
 
     A successful call is shown as its digest, never its raw payload: the full
     result stays in the observation log, reachable through its handle.
     """
     lines = [
-        f"Turn: {state.turn_count}",
+        f"Turn: {state.turn_count} of {max_turns}",
         f"Tool calls so far: {state.tool_call_count}",
         "",
         *render_memory(state),
@@ -81,8 +86,9 @@ def render_state(state: State) -> str:
         # The grade word, not the number: the model must know which items the
         # verdict rules count, and a number invites false precision (KTD8).
         for evidence in state.evidence:
+            supporting = "" if evidence.corroborates else ", supporting only"
             lines.append(
-                f"  {evidence.id} [{evidence.capability}, {grade(evidence.confidence)}] {evidence.observation}"
+                f"  {evidence.id} [{evidence.capability}, {grade(evidence.confidence)}{supporting}] {evidence.observation}"
             )
 
     if state.findings:
@@ -94,6 +100,14 @@ def render_state(state: State) -> str:
     # Last, where a model weighs it most: the rule the live run saw dropped
     # under a long prompt.
     lines.append("")
+    left = max_turns - state.turn_count
+    if left <= WRAP_UP_TURNS:
+        # Live runs read 'Turn: N' and kept exploring until the limit cut them off.
+        lines.append(
+            f"Only {left} turn{'' if left == 1 else 's'} left, and only submit_report is available. "
+            "Call it now with a summary, a verdict and your findings from the evidence you have; "
+            "inconclusive is a sound verdict when it does not settle the question."
+        )
     lines.append(
         "Reminder: any response that calls a capability must also call record_memory "
         "(empty lists are fine; a turn that recalls may defer them one turn), "

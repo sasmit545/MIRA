@@ -31,6 +31,7 @@ from .composition import (
 from .contracts.objective import Objective
 from .contracts.output import FinalOutput
 from .definition.agent import AgentDefinition
+from .model.adapter import DEFAULT_MODEL, MODELS
 from .runtime.tool_runtime import ToolRuntime
 
 # Asks for a verdict without presuming suspicion (R7). The web console and the
@@ -118,6 +119,7 @@ def main() -> None:
     parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
     parser.add_argument("--max-tool-calls", type=int, default=DEFAULT_MAX_TOOL_CALLS)
     parser.add_argument("--quiet", action="store_true", help="don't print each turn as it happens")
+    parser.add_argument("--model", choices=list(MODELS), default=DEFAULT_MODEL, help="which model investigates")
     arguments = parser.parse_args()
 
     output = asyncio.run(
@@ -127,6 +129,7 @@ def main() -> None:
             trace_dir=arguments.trace_dir,
             max_turns=arguments.max_turns,
             max_tool_calls=arguments.max_tool_calls,
+            model=arguments.model,
             on_turn=None if arguments.quiet else _print_turn,
         )
     )

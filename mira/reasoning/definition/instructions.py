@@ -56,6 +56,7 @@ def assemble_instructions(
         "Call the submit_report tool when you have enough evidence to form a verdict.",
         "The verdict is benign, malicious or inconclusive. inconclusive is a sound answer when the evidence does not settle the question.",
         "malicious stands only on strong evidence from at least two different capabilities, cited in your findings. With less, gather corroborating evidence or submit inconclusive; a report that breaks this rule is rejected.",
+        "Evidence marked supporting only may back a finding and its severity, but never counts as one of those two capabilities.",
         "A finding's severity cannot exceed the grade of the strongest evidence it cites: weak allows at most low, moderate at most medium.",
         "",
         "Required report schema:",

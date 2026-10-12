@@ -90,6 +90,23 @@ def test_malicious_from_one_capability_is_rejected_and_inconclusive_is_then_acce
     assert not accepted.failure and accepted.verdict == "inconclusive"
 
 
+def test_supporting_only_evidence_cannot_corroborate_malicious_but_still_lifts_severity():
+    """A packed benign file shows strong entropy and packer evidence from
+    several capabilities; that alone must not make it malicious."""
+    packed = [item(id, capability, STRONG) for id, capability in
+              (("E1", "file_info"), ("E2", "analyze_pe"), ("E3", "detect_packer"))]
+    for evidence in packed:
+        evidence.corroborates = False
+
+    alone = gate("malicious", [finding("E1", "E2", "E3")], packed)
+    backed = gate("malicious", [finding("E1", "E2", "E3", "E4"), finding("E5")],
+                  [*packed, item("E4", "run_capa"), item("E5", "list_imports")])
+
+    assert alone.record["outcome"] == "rejected" and "supporting-only" in alone.failure
+    assert backed.verdict == "malicious" and not backed.failure
+    assert gate("inconclusive", [finding("E1")], packed).findings[0].severity == Severity.HIGH
+
+
 def test_malicious_on_moderate_evidence_is_rejected():
     evidence = [item("E1", "run_capa", MODERATE), item("E2", "list_imports", MODERATE)]
 

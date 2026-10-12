@@ -3,6 +3,8 @@
 Pure. It checks the verdict is one of three (KTD3), caps each finding's
 severity at the grade of the strongest evidence it cites (KTD5), and requires
 strong cited evidence from two different capabilities for `malicious` (KTD4).
+Evidence that does not corroborate (such as entropy) still caps severity and
+may be cited, but never counts as one of those capabilities.
 It reads only core concepts - a grade, a capability name, the working notes -
 so every specialist's loop inherits it.
 
@@ -57,12 +59,14 @@ def check(
     strong = [item for item in evidence if grade(item.confidence) == "strong"]
     strong_cited = {item.id for item in strong if item.id in cited}
     if verdict == "malicious":
-        sources = sorted({by_id[ref].capability for ref in strong_cited})
+        sources = sorted({by_id[ref].capability for ref in strong_cited if by_id[ref].corroborates})
         if len(sources) < CORROBORATING_CAPABILITIES:
+            supporting = any(not by_id[ref].corroborates for ref in strong_cited)
             reasons.append(
                 f"malicious needs strong cited evidence from at least {CORROBORATING_CAPABILITIES} different "
                 f"capabilities, and the findings cite strong evidence from {len(sources)}"
-                f"{' (' + ', '.join(sources) + ')' if sources else ''}. "
+                f"{' (' + ', '.join(sources) + ')' if sources else ''}"
+                f"{'; supporting-only evidence does not count' if supporting else ''}. "
                 "Gather corroborating evidence and cite it, or submit inconclusive"
             )
 
